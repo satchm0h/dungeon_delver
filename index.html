@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dungeon Delver</title>
+  <link rel="stylesheet" href="style.css" />
+  <!-- Three.js r155 via cdnjs (version tag 0.155.0) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.155.0/three.min.js" defer></script>
+  <script src="config/assets.js" defer></script>
+  <script src="js/game.js" defer></script>
+  <script src="js/ui.js" defer></script>
+  <script src="js/main.js" defer></script>
+</head>
+<body>
+  <div id="game-container"></div>
+  <div id="hud">
+    <button id="btn-audio" class="hud-audio muted" title="Toggle Audio">Audio Off</button>
+    <div class="hud-title">Dungeon Delver</div>
+    <div class="hud-floor" id="hud-floor">Floor 1 / 100</div>
+    <div class="hud-bars">
+      <div class="hud-bar health">
+        <span class="label">HP</span>
+        <div class="bar">
+          <div class="fill" id="hud-health-fill"></div>
+        </div>
+        <span class="value" id="hud-health-value">0 / 0</span>
+        <span class="subvalue" id="hud-level-value">Level 1</span>
+      </div>
+      <div class="hud-bar xp">
+        <span class="label">XP</span>
+        <div class="bar">
+          <div class="fill" id="hud-xp-fill"></div>
+        </div>
+        <span class="value" id="hud-xp-value">0 / 0</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="pause-overlay" class="hidden">
+    <div class="overlay-panel">
+      <h2>Paused</h2>
+      <button id="btn-resume">Resume</button>
+      <button id="btn-restart">Restart</button>
+    </div>
+  </div>
+
+  <div id="restart-confirm" class="hidden">
+    <div class="overlay-panel">
+      <h2>Restart Run?</h2>
+      <p>Current progress will be lost.</p>
+      <div class="confirm-actions">
+        <button id="btn-confirm-restart">Yes</button>
+        <button id="btn-cancel-restart">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="debug-panel" class="hidden"></div>
+</body>
+</html>
