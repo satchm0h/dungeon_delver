@@ -45,6 +45,18 @@
     let moveCooldown = 0;
     const moveQueue = [];
     const lighting = {};
+    const PLAYER_EYE_OFFSET = TILE_SIZE * 0.1;
+    const CAMERA_FOLLOW_OFFSET = new THREE.Vector3(6, 9, 6);
+    const playerVisualPos = new THREE.Vector3();
+    const playerDesiredPos = new THREE.Vector3();
+    const cameraCurrentPos = new THREE.Vector3();
+    const cameraTargetPos = new THREE.Vector3();
+    const lookCurrent = new THREE.Vector3();
+    const lookTarget = new THREE.Vector3();
+    const glowTarget = new THREE.Vector3();
+    const monsterTarget = new THREE.Vector3();
+    const monsterHeightTarget = new THREE.Vector3();
+    const scratchVec = new THREE.Vector3();
 
     const inputState = {
       up: false,
@@ -85,10 +97,12 @@
 
       game = window.GameLogic.createGame();
 
-      rebuildWorld(game.getSnapshot());
-      initPlayerMesh();
-      initMonsters(game.getSnapshot());
-      snapPlayerPosition(game.getSnapshot());
+      const initialSnapshot = game.getSnapshot();
+      rebuildWorld(initialSnapshot);
+      initPlayerMesh(initialSnapshot);
+      initMonsters(initialSnapshot);
+      syncPresentation(initialSnapshot, true);
+      syncMonsters(initialSnapshot, 1);
 
       window.UI.init({
         onResume: () => setPaused(false),
@@ -110,13 +124,24 @@
       animReq = requestAnimationFrame(loop);
     }
 
-    function initPlayerMesh() {
+    function initPlayerMesh(snapshot) {
       const geom = new THREE.ConeGeometry(TILE_SIZE * 0.35, TILE_SIZE * 0.9, 4);
       const mat = new THREE.MeshStandardMaterial({ color: 0x9b6dff, flatShading: true });
       playerMesh = new THREE.Mesh(geom, mat);
       playerMesh.rotation.y = Math.PI / 4;
       playerMesh.castShadow = false;
       scene.add(playerMesh);
+
+      const initial = tileToWorld(snapshot.player.x, snapshot.player.y, scratchVec);
+      playerVisualPos.set(initial.x, TILE_SIZE * 0.1, initial.z);
+      cameraCurrentPos.set(initial.x + 6, initial.y + 9, initial.z + 6);
+      lookCurrent.set(initial.x, initial.y - TILE_SIZE * 0.4, initial.z);
+      playerMesh.position.copy(playerVisualPos);
+      camera.position.copy(cameraCurrentPos);
+      camera.lookAt(lookCurrent);
+      if (lighting.playerGlow) {
+        lighting.playerGlow.position.set(initial.x, 3.6, initial.z);
+      }
     }
 
     function prepareAudio() {
@@ -179,16 +204,6 @@
       }
     }
 
-    function snapPlayerPosition(snapshot) {
-      const pos = tileToWorld(snapshot.player.x, snapshot.player.y);
-      playerMesh.position.set(pos.x, TILE_SIZE * 0.1, pos.z);
-      camera.position.set(pos.x + 6, pos.y + 9, pos.z + 6);
-      camera.lookAt(pos.x, pos.y - TILE_SIZE * 0.4, pos.z);
-      if (lighting.playerGlow) {
-        lighting.playerGlow.position.set(pos.x, 3.6, pos.z);
-      }
-    }
-
     function clearMonsters() {
       for (const mesh of monsterMeshes.values()) {
         scene.remove(mesh);
@@ -245,24 +260,70 @@
       scene.add(tileGroup);
     }
 
-    function tileToWorld(x, y) {
-      return new THREE.Vector3(
+    function tileToWorld(x, y, target) {
+      if (!target) {
+        target = new THREE.Vector3();
+      }
+      target.set(
         x * TILE_SIZE - (GameLogic.MAP.WIDTH * TILE_SIZE) / 2,
         0,
         y * TILE_SIZE - (GameLogic.MAP.HEIGHT * TILE_SIZE) / 2
       );
+      return target;
     }
 
-    function updatePlayerMesh(snapshot) {
-      const pos = tileToWorld(snapshot.player.x, snapshot.player.y);
-      playerMesh.position.lerp(new THREE.Vector3(pos.x, TILE_SIZE * 0.1, pos.z), 0.4);
-      camera.position.lerp(
-        new THREE.Vector3(pos.x + 6, pos.y + 9, pos.z + 6),
-        0.1
+    function syncPresentation(snapshot, immediate = false) {
+      tileToWorld(snapshot.player.x, snapshot.player.y, playerDesiredPos);
+
+      cameraTargetPos.set(
+        playerDesiredPos.x + CAMERA_FOLLOW_OFFSET.x,
+        playerDesiredPos.y + CAMERA_FOLLOW_OFFSET.y,
+        playerDesiredPos.z + CAMERA_FOLLOW_OFFSET.z
       );
-      camera.lookAt(pos.x, pos.y - TILE_SIZE * 0.4, pos.z);
+
+      lookTarget.set(
+        playerDesiredPos.x,
+        playerDesiredPos.y - TILE_SIZE * 0.4,
+        playerDesiredPos.z
+      );
+
+      glowTarget.set(playerDesiredPos.x, 3.6, playerDesiredPos.z);
+
+      if (immediate) {
+        playerVisualPos.set(playerDesiredPos.x, PLAYER_EYE_OFFSET, playerDesiredPos.z);
+        playerMesh.position.copy(playerVisualPos);
+
+        cameraCurrentPos.copy(cameraTargetPos);
+        camera.position.copy(cameraCurrentPos);
+
+        lookCurrent.copy(lookTarget);
+        camera.lookAt(lookCurrent);
+
+        if (lighting.playerGlow) {
+          lighting.playerGlow.position.copy(glowTarget);
+        }
+      }
+    }
+
+    function updatePresentation(snapshot, delta) {
+      // Update targets if player state changed since last frame.
+      syncPresentation(snapshot, false);
+
+      const lerpPlayer = Math.min(1, delta * 12);
+      scratchVec.set(playerDesiredPos.x, PLAYER_EYE_OFFSET, playerDesiredPos.z);
+      playerVisualPos.lerp(scratchVec, lerpPlayer);
+      playerMesh.position.copy(playerVisualPos);
+
+      const lerpCamera = Math.min(1, delta * 6);
+      cameraCurrentPos.lerp(cameraTargetPos, lerpCamera);
+      camera.position.copy(cameraCurrentPos);
+
+      const lerpLook = Math.min(1, delta * 10);
+      lookCurrent.lerp(lookTarget, lerpLook);
+      camera.lookAt(lookCurrent);
+
       if (lighting.playerGlow) {
-        lighting.playerGlow.position.lerp(new THREE.Vector3(pos.x, 3.6, pos.z), 0.3);
+        lighting.playerGlow.position.lerp(glowTarget, Math.min(1, delta * 10));
       }
     }
 
@@ -281,8 +342,8 @@
         }
 
         const snapshot = game.getSnapshot();
-        updatePlayerMesh(snapshot);
-        syncMonsters(snapshot);
+        updatePresentation(snapshot, delta);
+        syncMonsters(snapshot, delta);
         updateHUD();
         updateDebug(delta, snapshot);
       }
@@ -304,7 +365,8 @@
       if (snapshot.lastAction && snapshot.lastAction.type === "depth") {
         rebuildWorld(snapshot);
         initMonsters(snapshot);
-        snapPlayerPosition(snapshot);
+        syncPresentation(snapshot, true);
+        syncMonsters(snapshot, 1);
       }
     }
 
@@ -335,19 +397,21 @@
       return null;
     }
 
-    function syncMonsters(snapshot) {
+    function syncMonsters(snapshot, delta) {
       const knownIds = new Set(monsterMeshes.keys());
       for (const monster of snapshot.monsters) {
         const mesh = monsterMeshes.get(monster.id);
-        const target = tileToWorld(monster.x, monster.y);
+        tileToWorld(monster.x, monster.y, monsterTarget);
         if (mesh) {
-          mesh.position.lerp(new THREE.Vector3(target.x, TILE_SIZE * 0.2, target.z), 0.25);
+          monsterHeightTarget.set(monsterTarget.x, TILE_SIZE * 0.2, monsterTarget.z);
+          const monsterLerp = Math.min(1, delta * 8);
+          mesh.position.lerp(monsterHeightTarget, monsterLerp);
           knownIds.delete(monster.id);
         } else {
           const geom = new THREE.OctahedronGeometry(TILE_SIZE * 0.35, 0);
           const mat = new THREE.MeshStandardMaterial({ color: 0xff6b8f, emissive: 0x36081c, flatShading: true });
           const newMesh = new THREE.Mesh(geom, mat);
-          newMesh.position.copy(tileToWorld(monster.x, monster.y));
+          newMesh.position.copy(monsterTarget);
           newMesh.position.y += TILE_SIZE * 0.25;
           scene.add(newMesh);
           monsterMeshes.set(monster.id, newMesh);
@@ -478,7 +542,8 @@
         const snapshot = game.getSnapshot();
         rebuildWorld(snapshot);
         initMonsters(snapshot);
-        snapPlayerPosition(snapshot);
+        syncPresentation(snapshot, true);
+        syncMonsters(snapshot, 1);
         moveCooldown = 0;
         paused = false;
         UI.setPauseVisible(false);
