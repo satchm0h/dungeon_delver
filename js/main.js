@@ -45,6 +45,15 @@
     let moveCooldown = 0;
     const moveQueue = [];
     const lighting = {};
+    const monsterGeometry = createStarGeometry(TILE_SIZE * 0.6, TILE_SIZE * 0.3, TILE_SIZE * 0.25, 5);
+    const monsterMaterial = new THREE.MeshStandardMaterial({
+      color: 0x5ec5ff,
+      emissive: 0x0a3254,
+      emissiveIntensity: 0.35,
+      roughness: 0.35,
+      metalness: 0.1,
+      flatShading: true
+    });
     const PLAYER_EYE_OFFSET = TILE_SIZE * 0.1;
     const CAMERA_FOLLOW_OFFSET = new THREE.Vector3(6, 9, 6);
     const playerVisualPos = new THREE.Vector3();
@@ -66,6 +75,32 @@
     };
 
     const container = document.getElementById("game-container");
+
+    function createStarGeometry(outerRadius, innerRadius, thickness, points = 5) {
+      const shape = new THREE.Shape();
+      const step = Math.PI / points;
+      for (let i = 0; i < points * 2; i += 1) {
+        const angle = i * step - Math.PI / 2;
+        const radius = i % 2 === 0 ? outerRadius : innerRadius;
+        const x = Math.cos(angle) * radius;
+        const y = Math.sin(angle) * radius;
+        if (i === 0) {
+          shape.moveTo(x, y);
+        } else {
+          shape.lineTo(x, y);
+        }
+      }
+      shape.closePath();
+
+      const geometry = new THREE.ExtrudeGeometry(shape, {
+        depth: thickness,
+        bevelEnabled: false
+      });
+      geometry.center();
+      geometry.rotateX(Math.PI / 2);
+      geometry.computeVertexNormals();
+      return geometry;
+    }
 
     function init() {
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -193,12 +228,11 @@
 
     function initMonsters(snapshot) {
       clearMonsters();
-      const geom = new THREE.OctahedronGeometry(TILE_SIZE * 0.35, 0);
       for (const monster of snapshot.monsters) {
-        const mat = new THREE.MeshStandardMaterial({ color: 0xff6b8f, emissive: 0x36081c, flatShading: true });
-        const mesh = new THREE.Mesh(geom, mat);
+        const mesh = new THREE.Mesh(monsterGeometry, monsterMaterial);
         mesh.position.copy(tileToWorld(monster.x, monster.y));
         mesh.position.y += TILE_SIZE * 0.25;
+        mesh.rotation.y = Math.random() * Math.PI * 2;
         scene.add(mesh);
         monsterMeshes.set(monster.id, mesh);
       }
@@ -406,13 +440,13 @@
           monsterHeightTarget.set(monsterTarget.x, TILE_SIZE * 0.2, monsterTarget.z);
           const monsterLerp = Math.min(1, delta * 8);
           mesh.position.lerp(monsterHeightTarget, monsterLerp);
+          mesh.rotation.y += delta * 1.2;
           knownIds.delete(monster.id);
         } else {
-          const geom = new THREE.OctahedronGeometry(TILE_SIZE * 0.35, 0);
-          const mat = new THREE.MeshStandardMaterial({ color: 0xff6b8f, emissive: 0x36081c, flatShading: true });
-          const newMesh = new THREE.Mesh(geom, mat);
+          const newMesh = new THREE.Mesh(monsterGeometry, monsterMaterial);
           newMesh.position.copy(monsterTarget);
           newMesh.position.y += TILE_SIZE * 0.25;
+          newMesh.rotation.y = Math.random() * Math.PI * 2;
           scene.add(newMesh);
           monsterMeshes.set(monster.id, newMesh);
         }
