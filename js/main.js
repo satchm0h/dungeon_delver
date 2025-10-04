@@ -1,19 +1,30 @@
 (function () {
-  /**
-   * The CDN build logs a warning (r150+) about UMD bundles being deprecated.
-   * TODO: migrate to Three.js ES modules (e.g., import { Scene } from 'three') once we drop the no-build requirement.
-   */
   function boot() {
-    if (!window.THREE) {
-      console.error("Three.js failed to load. Check CDN availability or network settings.");
+    const THREE = window.THREE;
+    const GameLogic = window.GameLogic;
+    const UI = window.UI;
+    if (!THREE || !GameLogic || !UI) {
+      console.error("Required globals (THREE/GameLogic/UI) are missing. Ensure scripts are loaded in index.html.");
       const container = document.getElementById("game-container");
       if (container) {
-        container.textContent = "Three.js failed to load. Check console for details.";
+        container.textContent = "Failed to initialize rendering modules.";
       }
       return;
     }
 
-    runGame();
+    const EffectComposer = THREE.EffectComposer || window.EffectComposer;
+    const RenderPass = THREE.RenderPass || window.RenderPass;
+    const UnrealBloomPass = THREE.UnrealBloomPass || window.UnrealBloomPass;
+    if (!EffectComposer || !RenderPass || !UnrealBloomPass) {
+      console.error("Post-processing dependencies missing. Check Three.js example scripts.");
+      const container = document.getElementById("game-container");
+      if (container) {
+        container.textContent = "Missing bloom dependencies.";
+      }
+      return;
+    }
+
+    runGame(THREE, GameLogic, UI, EffectComposer, RenderPass, UnrealBloomPass);
   }
 
   if (document.readyState === "loading") {
@@ -22,7 +33,7 @@
     boot();
   }
 
-  function runGame() {
+  function runGame(THREE, GameLogic, UI, EffectComposer, RenderPass, UnrealBloomPass) {
     const TILE_SIZE = 1.2;
     const MOVE_DELAY = 0.18; // seconds between grid steps
 
@@ -43,6 +54,9 @@
     let musicReady = false;
     let fpsSmoothing = 0;
     let moveCooldown = 0;
+    let composer;
+    let renderPass;
+    let bloomPass;
     const moveQueue = [];
     const lighting = {};
     const monsterGeometry = createStarGeometry(TILE_SIZE * 0.6, TILE_SIZE * 0.3, TILE_SIZE * 0.25, 5);
@@ -52,8 +66,45 @@
       emissiveIntensity: 0.35,
       roughness: 0.35,
       metalness: 0.1,
-      flatShading: true
+      flatShading: true,
+      transparent: true,
+      opacity: 0.95
     });
+    const floorMeshes = new Map();
+    const wallMeshes = new Map();
+    const trapMeshes = new Map();
+    const stairsMeshes = new Map();
+    const visibleFloors = new Set();
+    const visibleWalls = new Set();
+    let visitedFlags = new Uint8Array(GameLogic.MAP.WIDTH * GameLogic.MAP.HEIGHT);
+    const VISIBLE_RADIUS = 10;
+    const WALKABLE_TILES = new Set([
+      GameLogic.TILE.FLOOR,
+      GameLogic.TILE.TRAP_HIDDEN,
+      GameLogic.TILE.TRAP_TRIGGERED,
+      GameLogic.TILE.STAIRS_DOWN
+    ]);
+    const BLOCKING_TILES = new Set([
+      GameLogic.TILE.WALL,
+      GameLogic.TILE.LOCKED_DOOR,
+      GameLogic.TILE.SECRET_DOOR
+    ]);
+    const FLOOR_VISIBLE_COLOR = new THREE.Color(0x6b57d8);
+    const FLOOR_HIDDEN_COLOR = new THREE.Color(0x05020c);
+    const FLOOR_VISIBLE_EMISSIVE = new THREE.Color(0x251c55);
+    const FLOOR_HIDDEN_EMISSIVE = new THREE.Color(0x000000);
+    const WALL_VISIBLE_COLOR = new THREE.Color(0x342455);
+    const WALL_HIDDEN_COLOR = new THREE.Color(0x020108);
+    const WALL_VISIBLE_EMISSIVE = new THREE.Color(0x120a2a);
+    const WALL_HIDDEN_EMISSIVE = new THREE.Color(0x000000);
+    const TRAP_VISIBLE_COLOR = new THREE.Color(0x9f4dff);
+    const TRAP_HIDDEN_COLOR = new THREE.Color(0x120220);
+    const TRAP_VISIBLE_EMISSIVE = new THREE.Color(0x3a0c68);
+    const TRAP_HIDDEN_EMISSIVE = new THREE.Color(0x000000);
+    const STAIRS_VISIBLE_COLOR = new THREE.Color(0x74d1ff);
+    const STAIRS_HIDDEN_COLOR = new THREE.Color(0x0a1a28);
+    const STAIRS_VISIBLE_EMISSIVE = new THREE.Color(0x143342);
+    const STAIRS_HIDDEN_EMISSIVE = new THREE.Color(0x000000);
     const PLAYER_EYE_OFFSET = TILE_SIZE * 0.1;
     const CAMERA_FOLLOW_OFFSET = new THREE.Vector3(6, 9, 6);
     const playerVisualPos = new THREE.Vector3();
@@ -106,6 +157,13 @@
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
       renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.setPixelRatio(window.devicePixelRatio || 1);
+      if ('outputColorSpace' in renderer && THREE.SRGBColorSpace) {
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+      } else if ('outputEncoding' in renderer) {
+        renderer.outputEncoding = THREE.sRGBEncoding;
+      }
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.0;
       container.appendChild(renderer.domElement);
 
       scene = new THREE.Scene();
@@ -130,7 +188,18 @@
       const fogColor = new THREE.Color(0x140c28);
       scene.fog = new THREE.FogExp2(fogColor.getHex(), 0.028);
 
-      game = window.GameLogic.createGame();
+      composer = new EffectComposer(renderer);
+      composer.setPixelRatio(window.devicePixelRatio || 1);
+      composer.setSize(window.innerWidth, window.innerHeight);
+      renderPass = new RenderPass(scene, camera);
+      composer.addPass(renderPass);
+      bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.25, 0.6, 0.35);
+      bloomPass.threshold = 0.65;
+      bloomPass.strength = 1.2;
+      bloomPass.radius = 0.5;
+      composer.addPass(bloomPass);
+
+      game = GameLogic.createGame();
 
       const initialSnapshot = game.getSnapshot();
       rebuildWorld(initialSnapshot);
@@ -138,8 +207,9 @@
       initMonsters(initialSnapshot);
       syncPresentation(initialSnapshot, true);
       syncMonsters(initialSnapshot, 1);
+      updateVisibility(initialSnapshot);
 
-      window.UI.init({
+      UI.init({
         onResume: () => setPaused(false),
         onRestart: () => UI.showRestartConfirm(),
         onConfirmRestart: handleRestartChoice,
@@ -149,7 +219,7 @@
 
       prepareAudio();
 
-      updateHUD();
+      updateHUD(initialSnapshot);
 
       window.addEventListener("resize", onResize);
       document.addEventListener("keydown", onKeyDown);
@@ -251,45 +321,93 @@
       }
 
       tileGroup = new THREE.Group();
+      floorMeshes.clear();
+      wallMeshes.clear();
+      trapMeshes.clear();
+      stairsMeshes.clear();
+
       const floorGeom = new THREE.BoxGeometry(TILE_SIZE, 0.1, TILE_SIZE);
-      const floorMat = new THREE.MeshStandardMaterial({ color: 0x4f3b86, roughness: 0.6, metalness: 0.05, flatShading: true });
-      const stairMat = new THREE.MeshStandardMaterial({ color: 0x80d0ff, emissive: 0x1c3f63, emissiveIntensity: 0.9 });
       const wallGeom = new THREE.BoxGeometry(TILE_SIZE, TILE_SIZE, TILE_SIZE);
-      const wallMat = new THREE.MeshStandardMaterial({ color: 0x2d1f4f, roughness: 0.75, metalness: 0.1, flatShading: true });
-      const trapMat = new THREE.MeshStandardMaterial({ color: 0xd78eff, emissive: 0x5a1a92, emissiveIntensity: 1.15 });
+      const trapGeom = new THREE.BoxGeometry(TILE_SIZE, 0.1, TILE_SIZE);
+      const stairsGeom = new THREE.BoxGeometry(TILE_SIZE, 0.1, TILE_SIZE);
+
+      const baseFloorMat = new THREE.MeshStandardMaterial({
+        color: FLOOR_HIDDEN_COLOR.clone(),
+        roughness: 0.6,
+        metalness: 0.05,
+        flatShading: true,
+        transparent: true,
+        opacity: 0.12,
+        emissive: FLOOR_HIDDEN_EMISSIVE.clone()
+      });
+      const baseWallMat = new THREE.MeshStandardMaterial({
+        color: WALL_HIDDEN_COLOR.clone(),
+        roughness: 0.75,
+        metalness: 0.1,
+        flatShading: true,
+        transparent: true,
+        opacity: 0.1,
+        emissive: WALL_HIDDEN_EMISSIVE.clone()
+      });
+      const baseTrapMat = new THREE.MeshStandardMaterial({
+        color: TRAP_HIDDEN_COLOR.clone(),
+        roughness: 0.55,
+        metalness: 0.2,
+        flatShading: true,
+        transparent: true,
+        opacity: 0.12,
+        emissive: TRAP_HIDDEN_EMISSIVE.clone()
+      });
+      const baseStairsMat = new THREE.MeshStandardMaterial({
+        color: STAIRS_HIDDEN_COLOR.clone(),
+        roughness: 0.4,
+        metalness: 0.05,
+        flatShading: true,
+        transparent: true,
+        opacity: 0.18,
+        emissive: STAIRS_HIDDEN_EMISSIVE.clone()
+      });
 
       const { tiles } = snapshot;
       for (let y = 0; y < tiles.length; y += 1) {
         for (let x = 0; x < tiles[y].length; x += 1) {
           const tile = tiles[y][x];
           const worldPos = tileToWorld(x, y);
-          const floor = new THREE.Mesh(floorGeom, floorMat);
+          const key = tileKey(x, y);
+
+          const floor = new THREE.Mesh(floorGeom, baseFloorMat.clone());
           floor.position.copy(worldPos);
           floor.position.y -= TILE_SIZE * 0.5;
+          applyFloorVisibility(floor, false);
+          floorMeshes.set(key, floor);
           tileGroup.add(floor);
 
           if (tile === GameLogic.TILE.WALL) {
-            const wall = new THREE.Mesh(wallGeom, wallMat);
+            const wall = new THREE.Mesh(wallGeom, baseWallMat.clone());
             wall.position.copy(worldPos);
             wall.position.y -= TILE_SIZE * 0.05;
+            applyWallVisibility(wall, false);
+            wallMeshes.set(key, wall);
             tileGroup.add(wall);
           } else if (tile === GameLogic.TILE.STAIRS_DOWN) {
-            const stairs = new THREE.Mesh(floorGeom, stairMat);
+            const stairs = new THREE.Mesh(stairsGeom, baseStairsMat.clone());
             stairs.scale.set(0.7, 1, 0.7);
             stairs.position.copy(worldPos);
             stairs.position.y -= TILE_SIZE * 0.4;
+            applyStairsVisibility(stairs, false);
+            stairsMeshes.set(key, stairs);
             tileGroup.add(stairs);
           } else if (tile === GameLogic.TILE.TRAP_TRIGGERED) {
-            const trap = new THREE.Mesh(floorGeom, trapMat);
+            const trap = new THREE.Mesh(trapGeom, baseTrapMat.clone());
             trap.scale.set(0.6, 1, 0.6);
             trap.position.copy(worldPos);
             trap.position.y -= TILE_SIZE * 0.45;
+            applyTrapVisibility(trap, false);
+            trapMeshes.set(key, trap);
             tileGroup.add(trap);
           }
         }
       }
-
-      // TODO: Replace walls/floors with instanced meshes or loaded assets once overrides exist.
 
       scene.add(tileGroup);
     }
@@ -304,6 +422,86 @@
         y * TILE_SIZE - (GameLogic.MAP.HEIGHT * TILE_SIZE) / 2
       );
       return target;
+    }
+
+    function tileKey(x, y) {
+      return `${x},${y}`;
+    }
+
+    function tileIndex(x, y) {
+      return y * GameLogic.MAP.WIDTH + x;
+    }
+
+    function applyFloorVisibility(mesh, visible) {
+      if (!mesh) return;
+      const material = mesh.material;
+      if (!material) return;
+      if (visible) {
+        material.color.copy(FLOOR_VISIBLE_COLOR);
+        material.emissive.copy(FLOOR_VISIBLE_EMISSIVE);
+        material.opacity = 0.98;
+        material.emissiveIntensity = 1.1;
+      } else {
+        material.color.copy(FLOOR_HIDDEN_COLOR);
+        material.emissive.copy(FLOOR_HIDDEN_EMISSIVE);
+        material.opacity = 0.03;
+        material.emissiveIntensity = 0.0;
+      }
+      material.needsUpdate = true;
+    }
+
+    function applyWallVisibility(mesh, visible) {
+      if (!mesh) return;
+      const material = mesh.material;
+      if (!material) return;
+      if (visible) {
+        material.color.copy(WALL_VISIBLE_COLOR);
+        material.emissive.copy(WALL_VISIBLE_EMISSIVE);
+        material.opacity = 0.75;
+        material.emissiveIntensity = 0.7;
+      } else {
+        material.color.copy(WALL_HIDDEN_COLOR);
+        material.emissive.copy(WALL_HIDDEN_EMISSIVE);
+        material.opacity = 0.02;
+        material.emissiveIntensity = 0.0;
+      }
+      material.needsUpdate = true;
+    }
+
+    function applyTrapVisibility(mesh, visible) {
+      if (!mesh) return;
+      const material = mesh.material;
+      if (!material) return;
+      if (visible) {
+        material.color.copy(TRAP_VISIBLE_COLOR);
+        material.emissive.copy(TRAP_VISIBLE_EMISSIVE);
+        material.opacity = 0.9;
+        material.emissiveIntensity = 1.25;
+      } else {
+        material.color.copy(TRAP_HIDDEN_COLOR);
+        material.emissive.copy(TRAP_HIDDEN_EMISSIVE);
+        material.opacity = 0.03;
+        material.emissiveIntensity = 0.0;
+      }
+      material.needsUpdate = true;
+    }
+
+    function applyStairsVisibility(mesh, visible) {
+      if (!mesh) return;
+      const material = mesh.material;
+      if (!material) return;
+      if (visible) {
+        material.color.copy(STAIRS_VISIBLE_COLOR);
+        material.emissive.copy(STAIRS_VISIBLE_EMISSIVE);
+        material.opacity = 0.95;
+        material.emissiveIntensity = 1.35;
+      } else {
+        material.color.copy(STAIRS_HIDDEN_COLOR);
+        material.emissive.copy(STAIRS_HIDDEN_EMISSIVE);
+        material.opacity = 0.06;
+        material.emissiveIntensity = 0.0;
+      }
+      material.needsUpdate = true;
     }
 
     function syncPresentation(snapshot, immediate = false) {
@@ -361,6 +559,107 @@
       }
     }
 
+    function updateVisibility(snapshot) {
+      if (!snapshot || !snapshot.tiles || !snapshot.player) {
+        return;
+      }
+      const tiles = snapshot.tiles;
+      const player = snapshot.player;
+      const width = GameLogic.MAP.WIDTH;
+      const height = GameLogic.MAP.HEIGHT;
+
+      if (visitedFlags.length !== width * height) {
+        visitedFlags = new Uint8Array(width * height);
+      }
+
+      visibleFloors.clear();
+      visibleWalls.clear();
+      visitedFlags.fill(0);
+
+      const queueX = [player.x];
+      const queueY = [player.y];
+      const queueDist = [0];
+      let head = 0;
+      if (player.x < 0 || player.x >= width || player.y < 0 || player.y >= height) {
+        return;
+      }
+      visitedFlags[tileIndex(player.x, player.y)] = 1;
+
+      const directions = [
+        { x: 1, y: 0 },
+        { x: -1, y: 0 },
+        { x: 0, y: 1 },
+        { x: 0, y: -1 }
+      ];
+
+      while (head < queueX.length) {
+        const x = queueX[head];
+        const y = queueY[head];
+        const dist = queueDist[head];
+        head += 1;
+
+        visibleFloors.add(tileKey(x, y));
+
+        if (dist >= VISIBLE_RADIUS) {
+          continue;
+        }
+
+        for (const dir of directions) {
+          const nx = x + dir.x;
+          const ny = y + dir.y;
+          if (nx < 0 || nx >= width || ny < 0 || ny >= height) {
+            continue;
+          }
+
+          const tile = tiles[ny][nx];
+          const neighborKey = tileKey(nx, ny);
+
+          if (BLOCKING_TILES.has(tile)) {
+            if (tile === GameLogic.TILE.LOCKED_DOOR) {
+              visibleFloors.add(neighborKey);
+            }
+            visibleWalls.add(neighborKey);
+            continue;
+          }
+
+          if (!WALKABLE_TILES.has(tile)) {
+            continue;
+          }
+
+          const idx = tileIndex(nx, ny);
+          if (visitedFlags[idx]) {
+            continue;
+          }
+          visitedFlags[idx] = 1;
+          queueX.push(nx);
+          queueY.push(ny);
+          queueDist.push(dist + 1);
+        }
+      }
+
+      for (const [key, mesh] of floorMeshes) {
+        applyFloorVisibility(mesh, visibleFloors.has(key));
+      }
+      for (const [key, mesh] of wallMeshes) {
+        applyWallVisibility(mesh, visibleWalls.has(key));
+      }
+      for (const [key, mesh] of trapMeshes) {
+        applyTrapVisibility(mesh, visibleFloors.has(key));
+      }
+      for (const [key, mesh] of stairsMeshes) {
+        applyStairsVisibility(mesh, visibleFloors.has(key));
+      }
+
+      const monsterPositions = new Map();
+      for (const monster of snapshot.monsters) {
+        monsterPositions.set(monster.id, tileKey(monster.x, monster.y));
+      }
+      for (const [id, mesh] of monsterMeshes) {
+        const key = monsterPositions.get(id);
+        mesh.visible = key ? visibleFloors.has(key) : false;
+      }
+    }
+
     function loop(timestamp) {
       const delta = (timestamp - lastTimestamp) / 1000;
       lastTimestamp = timestamp;
@@ -378,11 +677,12 @@
         const snapshot = game.getSnapshot();
         updatePresentation(snapshot, delta);
         syncMonsters(snapshot, delta);
-        updateHUD();
+        updateVisibility(snapshot);
+        updateHUD(snapshot);
         updateDebug(delta, snapshot);
       }
 
-      renderer.render(scene, camera);
+      composer.render();
       animReq = requestAnimationFrame(loop);
     }
 
@@ -401,6 +701,8 @@
         initMonsters(snapshot);
         syncPresentation(snapshot, true);
         syncMonsters(snapshot, 1);
+        updateVisibility(snapshot);
+        updateHUD(snapshot);
       }
     }
 
@@ -461,16 +763,16 @@
       }
     }
 
-    function updateHUD() {
-      const snapshot = game.getSnapshot();
+    function updateHUD(snapshot) {
+      const data = snapshot || game.getSnapshot();
       UI.updateHUD({
-        hp: snapshot.player.hp,
-        hpMax: snapshot.player.hpMax,
-        xp: snapshot.player.xp,
-        xpMax: snapshot.player.xpMax,
-        floor: snapshot.depth,
-        keys: snapshot.player.keys,
-        level: snapshot.player.lvl
+        hp: data.player.hp,
+        hpMax: data.player.hpMax,
+        xp: data.player.xp,
+        xpMax: data.player.xpMax,
+        floor: data.depth,
+        keys: data.player.keys,
+        level: data.player.lvl
       });
     }
 
@@ -499,6 +801,15 @@
       renderer.setSize(w, h);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
+      if (composer) {
+        composer.setSize(w, h);
+        if (renderPass) {
+          renderPass.camera = camera;
+        }
+        if (bloomPass) {
+          bloomPass.setSize(w, h);
+        }
+      }
     }
 
     function onKeyDown(event) {
@@ -578,10 +889,11 @@
         initMonsters(snapshot);
         syncPresentation(snapshot, true);
         syncMonsters(snapshot, 1);
+        updateVisibility(snapshot);
         moveCooldown = 0;
         paused = false;
         UI.setPauseVisible(false);
-        updateHUD();
+        updateHUD(snapshot);
       }
       UI.hideRestartConfirm();
     }
@@ -601,11 +913,6 @@
       }
     }
 
-    // Simple vignette/postFX placeholder.
-    // TODO: Switch to ES modules and use EffectComposer + UnrealBloomPass when Bloom is enabled.
-    // Steps: replace CDN script with `type="module"` import, create EffectComposer with RenderPass
-    // and UnrealBloomPass, then render via composer in the loop.
-
     init();
-  }
+}
 })();
