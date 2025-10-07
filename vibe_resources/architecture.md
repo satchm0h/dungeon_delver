@@ -15,16 +15,17 @@ graph TD
   C --> F
   D --> F
   E --> F
+  G[Three.js UMD + PostFX scripts] --> F
 
-  F --> G[(Three.js Renderer)]
-  F --> H[(DOM HUD)]
+  F --> H[(Three.js Scene + Composer)]
+  F --> I[(DOM HUD)]
 ```
 
 - `index.html` links all runtime scripts and the stylesheet.
 - `config/assets.js` defines configurable asset overrides (textures, models, audio) exposed via a global `ASSETS` object.
 - `js/game.js` encapsulates mechanics, procedural generation, and state transitions.
 - `js/ui.js` manages HUD elements, overlays, and debug readouts.
-- `js/main.js` orchestrates rendering, input handling, audio, and the bridge between game logic and UI.
+- `js/main.js` orchestrates rendering, fog-of-war visibility, input handling, audio, and the bridge between game logic and UI.
 
 ## Core Modules
 
@@ -72,12 +73,12 @@ Provides DOM references and basic setters:
 
 Responsibilities include:
 
-- Initializing Three.js renderer, scene, camera, lights, and audio.
-- Building tile meshes, star-shaped monsters, and the cone placeholder player mesh.
+- Waiting for the UMD Three.js bundle plus example scripts (EffectComposer/RenderPass/UnrealBloomPass) to populate globals, then booting once the DOM is ready.
+- Initializing the renderer with ACES tone mapping, the main scene/camera, and a bloom-enabled `EffectComposer` pipeline.
+- Building tile meshes, rotating star-shaped monsters, and the cone placeholder player mesh.
 - Maintaining smoothed presentation state (lerp-based for player/camera/glow) while querying discrete game snapshots.
-- Handling WASD movement, queueing inputs, and synthesizing turn ticks constrained by a move cooldown.
-- Synchronizing monster meshes, performing rotations, and managing the animation loop.
-- Integrating HUD hooks, debug output, and the music playback toggle.
+- Running BFS visibility every frame to drive fog-of-war materials and monster visibility within a 10-tile radius.
+- Handling WASD movement, queueing inputs, synthesizing turn ticks, and integrating HUD/audio toggles.
 
 ```mermaid
 graph LR
@@ -111,14 +112,18 @@ sequenceDiagram
   participant Input
   participant Game
   participant Renderer
+  participant Composer
   participant UI
 
   User->>Input: keydown (W/A/S/D)
   Input->>Game: queue direction
   Renderer->>Game: handleMove()
   Game-->>Renderer: snapshot/lastAction
-  Renderer->>UI: updateHUD()
-  Renderer->>Renderer: update meshes (lerp)
+  Renderer->>Renderer: lerp meshes & glow
+  Renderer->>Renderer: BFS visibility (fog-of-war)
+  Renderer->>Composer: render(scene, camera)
+  Composer-->>Renderer: bloom-enhanced frame
+  Renderer->>UI: updateHUD/debug
   Renderer->>Audio: toggle/play music (if unmuted)
 ```
 
@@ -142,6 +147,7 @@ graph TD
   vibe --> arch[vibe_resources/architecture.md]
   root --> style[style.css]
   root --> index[index.html]
+  index --> scripts[Three + postFX UMD scripts]
 ```
 
 ## Potential Future Features
