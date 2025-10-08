@@ -6,15 +6,26 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Dungeon Delver</title>
   <link rel="stylesheet" href="style.css" />
-  <!-- Three.js + postprocessing add-ons loaded globally -->
-  <script src="https://unpkg.com/three@0.155.0/build/three.min.js" defer></script>
-  <script src="https://unpkg.com/three@0.155.0/examples/js/postprocessing/Pass.js" defer></script>
-  <script src="https://unpkg.com/three@0.155.0/examples/js/shaders/CopyShader.js" defer></script>
-  <script src="https://unpkg.com/three@0.155.0/examples/js/postprocessing/ShaderPass.js" defer></script>
-  <script src="https://unpkg.com/three@0.155.0/examples/js/postprocessing/EffectComposer.js" defer></script>
-  <script src="https://unpkg.com/three@0.155.0/examples/js/postprocessing/RenderPass.js" defer></script>
-  <script src="https://unpkg.com/three@0.155.0/examples/js/shaders/LuminosityHighPassShader.js" defer></script>
-  <script src="https://unpkg.com/three@0.155.0/examples/js/postprocessing/UnrealBloomPass.js" defer></script>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.155.0/build/three.module.js",
+        "three/examples/": "https://unpkg.com/three@0.155.0/examples/jsm/"
+      }
+    }
+  </script>
+  <!-- Three.js ES modules re-exported to expected globals -->
+  <script type="module">
+    import * as THREE from "three";
+    import { EffectComposer } from "three/examples/postprocessing/EffectComposer.js";
+    import { RenderPass } from "three/examples/postprocessing/RenderPass.js";
+    import { UnrealBloomPass } from "three/examples/postprocessing/UnrealBloomPass.js";
+
+    window.THREE = THREE;
+    window.EffectComposer = EffectComposer;
+    window.RenderPass = RenderPass;
+    window.UnrealBloomPass = UnrealBloomPass;
+  </script>
 
   <script src="config/assets.js" defer></script>
   <script src="js/game.js" defer></script>

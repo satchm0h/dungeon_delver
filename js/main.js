@@ -16,12 +16,7 @@
     const RenderPass = THREE.RenderPass || window.RenderPass;
     const UnrealBloomPass = THREE.UnrealBloomPass || window.UnrealBloomPass;
     if (!EffectComposer || !RenderPass || !UnrealBloomPass) {
-      console.error("Post-processing dependencies missing. Check Three.js example scripts.");
-      const container = document.getElementById("game-container");
-      if (container) {
-        container.textContent = "Missing bloom dependencies.";
-      }
-      return;
+      console.warn("Post-processing dependencies missing; continuing without bloom pipeline.");
     }
 
     runGame(THREE, GameLogic, UI, EffectComposer, RenderPass, UnrealBloomPass);
@@ -36,6 +31,7 @@
   function runGame(THREE, GameLogic, UI, EffectComposer, RenderPass, UnrealBloomPass) {
     const TILE_SIZE = 1.2;
     const MOVE_DELAY = 0.18; // seconds between grid steps
+    const postProcessingAvailable = Boolean(EffectComposer && RenderPass && UnrealBloomPass);
 
     let renderer;
     let scene;
@@ -188,16 +184,22 @@
       const fogColor = new THREE.Color(0x140c28);
       scene.fog = new THREE.FogExp2(fogColor.getHex(), 0.028);
 
-      composer = new EffectComposer(renderer);
-      composer.setPixelRatio(window.devicePixelRatio || 1);
-      composer.setSize(window.innerWidth, window.innerHeight);
-      renderPass = new RenderPass(scene, camera);
-      composer.addPass(renderPass);
-      bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.25, 0.6, 0.35);
-      bloomPass.threshold = 0.65;
-      bloomPass.strength = 1.2;
-      bloomPass.radius = 0.5;
-      composer.addPass(bloomPass);
+      if (postProcessingAvailable) {
+        composer = new EffectComposer(renderer);
+        composer.setPixelRatio(window.devicePixelRatio || 1);
+        composer.setSize(window.innerWidth, window.innerHeight);
+        renderPass = new RenderPass(scene, camera);
+        composer.addPass(renderPass);
+        bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.25, 0.6, 0.35);
+        bloomPass.threshold = 0.65;
+        bloomPass.strength = 1.2;
+        bloomPass.radius = 0.5;
+        composer.addPass(bloomPass);
+      } else {
+        composer = null;
+        renderPass = null;
+        bloomPass = null;
+      }
 
       game = GameLogic.createGame();
 
@@ -682,7 +684,11 @@
         updateDebug(delta, snapshot);
       }
 
-      composer.render();
+      if (composer) {
+        composer.render();
+      } else {
+        renderer.render(scene, camera);
+      }
       animReq = requestAnimationFrame(loop);
     }
 
