@@ -54,8 +54,9 @@ classDiagram
 
 Key responsibilities:
 
-- Procedural map generation with room carving, corridor linking (minimum-spanning approach + extra loops), trap/door sprinkling, and farthest-floor stair placement.
+- Procedural map generation with room carving, corridor linking (minimum-spanning approach + extra loops), trap/door/key sprinkling, and farthest-floor stair placement. Keys are always distributed in greater quantity than locked doors to avoid deadlocks.
 - Turn-based movement: the player moves one tile per input, monsters respond in discrete turns using line-of-sight activation.
+- Trap resolution deals immediate damage and converts the tile to its triggered variant; key tiles are consumed on contact and raise the player’s key inventory.
 - Combat resolution, XP, leveling, and persistence for best floor reached.
 - Collection of telemetry for debug overlays.
 
@@ -65,7 +66,7 @@ Supporting utilities: deterministic RNG (`mulberry32`), room helpers (`makeRoom`
 
 Provides DOM references and basic setters:
 
-- HUD updates for HP/XP bars, floor, keys, level.
+- HUD updates for HP/XP bars, floor, keys, level, plus a brief damage flash overlay when HP drops.
 - Pause & restart overlays, audio toggle button, and debug panel.
 - Simple interface for external modules via `UI.init` with callbacks.
 
@@ -73,12 +74,12 @@ Provides DOM references and basic setters:
 
 Responsibilities include:
 
-- Waiting for the UMD Three.js bundle plus example scripts (EffectComposer/RenderPass/UnrealBloomPass) to populate globals, then booting once the DOM is ready.
-- Initializing the renderer with ACES tone mapping, the main scene/camera, and a bloom-enabled `EffectComposer` pipeline.
-- Building tile meshes, rotating star-shaped monsters, and the cone placeholder player mesh.
+- Loading Three.js via ES modules (import map) and re-exporting the expected globals before booting once the DOM is ready.
+- Initializing the renderer with ACES tone mapping, the main scene/camera, and a bloom-enabled `EffectComposer` pipeline when the post-processing scripts are present (fallbacks to direct renderer output otherwise).
+- Building tile meshes, rotating star-shaped monsters, the glowing cone player mesh, lazily instantiated triggered traps, and hovering key pickups with simple spin/hover animation.
 - Maintaining smoothed presentation state (lerp-based for player/camera/glow) while querying discrete game snapshots.
-- Running BFS visibility every frame to drive fog-of-war materials and monster visibility within a 10-tile radius.
-- Handling WASD movement, queueing inputs, synthesizing turn ticks, and integrating HUD/audio toggles.
+- Running BFS visibility every frame to drive fog-of-war materials, monster visibility, and trap/key visibility within a 10-tile radius.
+- Handling WASD movement, queueing inputs, synthesizing turn ticks, integrating HUD/audio toggles with combat hit SFX, and detecting HP loss to trigger the HUD damage flash.
 
 ```mermaid
 graph LR
@@ -102,7 +103,7 @@ Defines a global `ASSETS` object to allow future overrides:
 
 1. **Initialization**: `main.js` loads config, game, and UI modules, sets up rendering, and starts the loop.
 2. **Input**: Keyboard events populate a move queue processed during fixed updates (`1/60s`).
-3. **Game Step**: `game.handleMove` and `game.monsterTurn` mutate state per turn; events (combat, doors, depth) are recorded.
+3. **Game Step**: `game.handleMove` and `game.monsterTurn` mutate state per turn; events (combat, traps, keys, doors, depth) are recorded.
 4. **Presentation**: Each frame, `main.js` pulls a snapshot, smooths positions, updates meshes/HUD, and writes debug info.
 5. **Persistence**: Depth progression updates `localStorage` (`bestScore`).
 
@@ -147,7 +148,7 @@ graph TD
   vibe --> arch[vibe_resources/architecture.md]
   root --> style[style.css]
   root --> index[index.html]
-  index --> scripts[Three + postFX UMD scripts]
+  index --> scripts[Three ES modules + postFX passes]
 ```
 
 ## Potential Future Features

@@ -9,6 +9,9 @@
   let hudXpValue;
   let hudFloor;
   let hudLevelValue;
+  let damageFlash;
+  let damageFlashValue;
+  let damageTimeout;
 
   const listeners = {
     resume: null,
@@ -28,6 +31,8 @@
     hudXpValue = document.getElementById("hud-xp-value");
     hudFloor = document.getElementById("hud-floor");
     hudLevelValue = document.getElementById("hud-level-value");
+    damageFlash = document.getElementById("damage-flash");
+    damageFlashValue = document.getElementById("damage-flash-value");
 
     listeners.resume = opts.onResume;
     listeners.restart = opts.onRestart;
@@ -64,10 +69,28 @@
     hudXpFill.style.width = `${xpPercent * 100}%`;
     hudHealthValue.textContent = `${hp} / ${hpMax}`;
     hudXpValue.textContent = `${xp} / ${xpMax}`;
-    hudFloor.textContent = `Floor ${floor} / 100 · Keys ${keys}`;
+    hudFloor.textContent = `Floor ${floor} / 100 | Keys ${keys}`;
     if (hudLevelValue) {
       hudLevelValue.textContent = `Level ${level}`;
     }
+  }
+
+  function flashDamage(amount) {
+    if (!damageFlash || !damageFlashValue) {
+      return;
+    }
+    damageFlashValue.textContent = amount ? `-${amount}` : "";
+    damageFlash.classList.remove("active");
+    // Force reflow so the animation retriggers even on rapid hits.
+    void damageFlash.offsetWidth;
+    damageFlash.classList.add("active");
+    if (damageTimeout) {
+      clearTimeout(damageTimeout);
+    }
+    damageTimeout = setTimeout(() => {
+      damageFlash.classList.remove("active");
+      damageFlashValue.textContent = "";
+    }, 300);
   }
 
   function setPauseVisible(isVisible) {
@@ -104,6 +127,7 @@
     hideRestartConfirm,
     setDebug,
     setDebugVisible,
-    setAudioMuted
+    setAudioMuted,
+    flashDamage
   };
 })();

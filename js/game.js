@@ -7,7 +7,8 @@
     SECRET_DOOR: 4,
     TRAP_HIDDEN: 5,
     TRAP_TRIGGERED: 6,
-    STAIRS_DOWN: 7
+    STAIRS_DOWN: 7,
+    KEY: 8
   };
 
   const DIRS = {
@@ -82,6 +83,7 @@
       tile === TILE.FLOOR ||
       tile === TILE.TRAP_HIDDEN ||
       tile === TILE.TRAP_TRIGGERED ||
+      tile === TILE.KEY ||
       tile === TILE.STAIRS_DOWN
     );
   }
@@ -277,23 +279,44 @@
     const trapCount = Math.min(12, 4 + Math.floor(depth / 3));
     const secretCount = Math.min(5, 2 + Math.floor(depth / 8));
     const lockedCount = Math.min(4, 1 + Math.floor(depth / 18));
+    const keyCount = Math.max(lockedCount + 1, Math.min(6, 2 + Math.floor(depth / 5)));
 
     shuffleInPlace(rng, candidates);
+    const keyCandidates = candidates.slice();
+    shuffleInPlace(rng, keyCandidates);
 
-    for (let i = 0; i < trapCount && candidates.length; i += 1) {
-      const tile = candidates.pop();
+    function placeFeature(pool, count, mutator) {
+      let placed = 0;
+      let guard = pool.length * 3;
+      while (placed < count && pool.length && guard > 0) {
+        guard -= 1;
+        const tile = pool.pop();
+        if (!tile) {
+          break;
+        }
+        if (tiles[tile.y][tile.x] !== TILE.FLOOR) {
+          continue;
+        }
+        mutator(tile);
+        placed += 1;
+      }
+    }
+
+    placeFeature(keyCandidates, keyCount, (tile) => {
+      tiles[tile.y][tile.x] = TILE.KEY;
+    });
+
+    placeFeature(candidates, trapCount, (tile) => {
       tiles[tile.y][tile.x] = TILE.TRAP_HIDDEN;
-    }
+    });
 
-    for (let i = 0; i < secretCount && candidates.length; i += 1) {
-      const tile = candidates.pop();
+    placeFeature(candidates, secretCount, (tile) => {
       tiles[tile.y][tile.x] = TILE.SECRET_DOOR;
-    }
+    });
 
-    for (let i = 0; i < lockedCount && candidates.length; i += 1) {
-      const tile = candidates.pop();
+    placeFeature(candidates, lockedCount, (tile) => {
       tiles[tile.y][tile.x] = TILE.LOCKED_DOOR;
-    }
+    });
   }
 
   function shuffleInPlace(rng, array) {
@@ -517,11 +540,15 @@
     player.y = ny;
     moved = true;
 
-    if (tile === TILE.TRAP_HIDDEN) {
+    if (tile === TILE.KEY) {
+      player.keys += 1;
+      this.state.tiles[ny][nx] = TILE.FLOOR;
+      events.push({ type: "key-found", x: nx, y: ny, total: player.keys });
+    } else if (tile === TILE.TRAP_HIDDEN) {
       const damage = Math.max(4, Math.floor(player.hpMax * 0.15));
       player.hp = Math.max(0, player.hp - damage);
       this.state.tiles[ny][nx] = TILE.TRAP_TRIGGERED;
-      events.push({ type: "trap", amount: damage });
+      events.push({ type: "trap", amount: damage, x: nx, y: ny });
       if (player.hp <= 0) {
         this.endRun();
       }
@@ -702,6 +729,12 @@
 
   Game.prototype.update = function () {
     // Turn-based: per-frame updates not required at the moment.
+  };
+
+  Game.prototype.consumeEvents = function () {
+    const current = Array.isArray(this.state.events) ? this.state.events : [];
+    this.state.events = [];
+    return current.slice();
   };
 
   Game.prototype.collectTelemetry = function () {
