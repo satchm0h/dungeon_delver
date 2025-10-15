@@ -77,12 +77,29 @@
     const stairsMeshes = new Map();
     const visibleFloors = new Set();
     const visibleWalls = new Set();
-    const DEFAULT_FLOOR_TEXTURE_URL = "assets/textures/Floor.jpg";
-    const DEFAULT_FLOOR_TEXTURE_REMOTE = "https://raw.githubusercontent.com/satchm0h/dungeon_delver/refs/heads/main/assets/textures/Floor.jpg";
-    const inlineFloorTextureData = typeof window.FLOOR_TEXTURE_INLINE_DATA === "string" ? window.FLOOR_TEXTURE_INLINE_DATA : null;
     const isFileProtocol = typeof window !== "undefined" && window.location && window.location.protocol === "file:";
-    let floorTexture = null;
-    let floorTextureLoading = false;
+    const inlineFloorTextureData = typeof window.FLOOR_TEXTURE_INLINE_DATA === "string" ? window.FLOOR_TEXTURE_INLINE_DATA : null;
+    const inlineWallTextureData = typeof window.WALL_TEXTURE_INLINE_DATA === "string" ? window.WALL_TEXTURE_INLINE_DATA : null;
+    const textureSlots = {
+      floor: {
+        key: "floor",
+        name: "FloorTexture",
+        local: "assets/textures/Floor.jpg",
+        remote: "https://raw.githubusercontent.com/satchm0h/dungeon_delver/refs/heads/main/assets/textures/Floor.jpg",
+        inline: inlineFloorTextureData
+      },
+      wall: {
+        key: "wall",
+        name: "WallTexture",
+        local: "assets/textures/Walls.png",
+        remote: "https://raw.githubusercontent.com/satchm0h/dungeon_delver/refs/heads/main/assets/textures/Walls.png",
+        inline: inlineWallTextureData
+      }
+    };
+    const textureStates = {
+      floor: { texture: null, loading: false },
+      wall: { texture: null, loading: false }
+    };
     let visitedFlags = new Uint8Array(GameLogic.MAP.WIDTH * GameLogic.MAP.HEIGHT);
     const VISIBLE_RADIUS = 10;
     const WALKABLE_TILES = new Set([
@@ -101,9 +118,9 @@
     const FLOOR_HIDDEN_COLOR = new THREE.Color(0x161229);
     const FLOOR_VISIBLE_EMISSIVE = new THREE.Color(0x241b45);
     const FLOOR_HIDDEN_EMISSIVE = new THREE.Color(0x000000);
-    const WALL_VISIBLE_COLOR = new THREE.Color(0x342455);
-    const WALL_HIDDEN_COLOR = new THREE.Color(0x020108);
-    const WALL_VISIBLE_EMISSIVE = new THREE.Color(0x120a2a);
+    const WALL_VISIBLE_COLOR = new THREE.Color(0xffffff);
+    const WALL_HIDDEN_COLOR = new THREE.Color(0x07030f);
+    const WALL_VISIBLE_EMISSIVE = new THREE.Color(0x23203d);
     const WALL_HIDDEN_EMISSIVE = new THREE.Color(0x000000);
     const TRAP_VISIBLE_COLOR = new THREE.Color(0x9f4dff);
     const TRAP_HIDDEN_COLOR = new THREE.Color(0x120220);
@@ -161,6 +178,35 @@
       geometry.rotateX(Math.PI / 2);
       geometry.computeVertexNormals();
       return geometry;
+    }
+
+    function createWallMaterial(useTexture, sharedTexture) {
+      const material = new THREE.MeshStandardMaterial({
+        color: WALL_HIDDEN_COLOR.clone(),
+        roughness: 0.75,
+        metalness: 0.1,
+        flatShading: true,
+        transparent: true,
+        opacity: 0.1,
+        emissive: WALL_HIDDEN_EMISSIVE.clone(),
+        map: useTexture && sharedTexture ? sharedTexture : null
+      });
+      if (useTexture && sharedTexture) {
+        material.map = sharedTexture;
+        material.needsUpdate = true;
+      }
+      return material;
+    }
+
+    function createWallMaterials(sharedTexture) {
+      return [
+        createWallMaterial(true, sharedTexture),
+        createWallMaterial(true, sharedTexture),
+        createWallMaterial(false, sharedTexture),
+        createWallMaterial(false, sharedTexture),
+        createWallMaterial(true, sharedTexture),
+        createWallMaterial(true, sharedTexture)
+      ];
     }
 
     function init() {
@@ -388,7 +434,8 @@
       const wallGeom = new THREE.BoxGeometry(TILE_SIZE, TILE_SIZE, TILE_SIZE);
       const stairsGeom = new THREE.BoxGeometry(TILE_SIZE, 0.1, TILE_SIZE);
 
-      const sharedFloorTexture = getFloorTexture();
+      const sharedFloorTexture = getSharedTexture("floor");
+      const sharedWallTexture = getSharedTexture("wall");
       const baseFloorMat = new THREE.MeshStandardMaterial({
         color: FLOOR_HIDDEN_COLOR.clone(),
         roughness: 0.6,
@@ -403,15 +450,6 @@
         baseFloorMat.map = sharedFloorTexture;
         baseFloorMat.needsUpdate = true;
       }
-      const baseWallMat = new THREE.MeshStandardMaterial({
-        color: WALL_HIDDEN_COLOR.clone(),
-        roughness: 0.75,
-        metalness: 0.1,
-        flatShading: true,
-        transparent: true,
-        opacity: 0.1,
-        emissive: WALL_HIDDEN_EMISSIVE.clone()
-      });
       const baseStairsMat = new THREE.MeshStandardMaterial({
         color: STAIRS_HIDDEN_COLOR.clone(),
         roughness: 0.4,
@@ -440,7 +478,8 @@
           tileGroup.add(floor);
 
           if (tile === GameLogic.TILE.WALL) {
-            const wall = new THREE.Mesh(wallGeom, baseWallMat.clone());
+            const wallMaterials = createWallMaterials(sharedWallTexture);
+            const wall = new THREE.Mesh(wallGeom, wallMaterials);
             wall.position.copy(worldPos);
             wall.position.y -= TILE_SIZE * 0.05;
             applyWallVisibility(wall, false);
@@ -483,76 +522,82 @@
       return y * GameLogic.MAP.WIDTH + x;
     }
 
-    function getFloorTexture() {
-      if (floorTexture) {
-        return floorTexture;
+    function getSharedTexture(slot) {
+      const config = textureSlots[slot];
+      if (!config) {
+        return null;
       }
-      if (!floorTextureLoading) {
-        floorTextureLoading = true;
-        floorTexture = new THREE.Texture();
-        floorTexture.name = "FloorTexture";
-        applyFloorTextureSettings(floorTexture);
-        const sources = gatherFloorTextureSources();
-        loadFloorTextureFromSources(floorTexture, sources);
+      const state = textureStates[slot];
+      if (!state.texture) {
+        state.texture = new THREE.Texture();
+        state.texture.name = config.name;
+        applySharedTextureSettings(state.texture);
+        const sources = gatherTextureSources(config);
+        loadTextureFromSources(slot, state, sources);
       }
-      return floorTexture;
+      return state.texture;
     }
 
-    function gatherFloorTextureSources() {
+    function gatherTextureSources(config) {
       const sources = [];
-      const assetOverride = window.ASSETS && window.ASSETS.textures && window.ASSETS.textures.floor;
+      const assetOverride = window.ASSETS && window.ASSETS.textures && window.ASSETS.textures[config.key];
       if (assetOverride) {
         sources.push(assetOverride);
       }
       if (isFileProtocol) {
-        sources.push(DEFAULT_FLOOR_TEXTURE_REMOTE);
-        if (inlineFloorTextureData) {
-          sources.push(inlineFloorTextureData);
+        if (config.remote) {
+          sources.push(config.remote);
         }
-        sources.push(DEFAULT_FLOOR_TEXTURE_URL);
+        if (config.inline) {
+          sources.push(config.inline);
+        }
+        sources.push(config.local);
       } else {
-        sources.push(DEFAULT_FLOOR_TEXTURE_URL);
-        sources.push(DEFAULT_FLOOR_TEXTURE_REMOTE);
-        if (inlineFloorTextureData) {
-          sources.push(inlineFloorTextureData);
+        sources.push(config.local);
+        if (config.remote) {
+          sources.push(config.remote);
+        }
+        if (config.inline) {
+          sources.push(config.inline);
         }
       }
       return dedupeSources(sources.filter(Boolean));
     }
 
-    function loadFloorTextureFromSources(targetTexture, sources) {
-      if (!targetTexture) {
+    function loadTextureFromSources(slot, state, sources) {
+      if (!state || !state.texture) {
         return;
       }
+      state.loading = true;
       const queue = Array.isArray(sources) ? [...sources] : [];
       const attemptNext = () => {
         if (!queue.length) {
-          console.warn("Failed to resolve any floor texture source.");
-          floorTextureLoading = false;
+          console.warn(`Failed to resolve any ${slot} texture source.`);
+          state.loading = false;
           return;
         }
         const src = queue.shift();
-        if (shouldSkipFloorSource(src)) {
+        if (shouldSkipTextureSource(src)) {
           attemptNext();
           return;
         }
         const crossOrigin = determineCrossOrigin(src);
         loadImageElement(src, crossOrigin)
           .then((image) => {
-            targetTexture.image = image;
-            applyFloorTextureSettings(targetTexture);
-            targetTexture.needsUpdate = true;
-            floorTextureLoading = false;
+            state.texture.image = image;
+            applySharedTextureSettings(state.texture);
+            state.texture.needsUpdate = true;
+            state.loading = false;
           })
           .catch((err) => {
-            console.warn("Failed to load floor texture:", src, err);
+            console.warn(`Failed to load ${slot} texture:`, src, err);
             attemptNext();
           });
       };
       attemptNext();
     }
 
-    function applyFloorTextureSettings(texture) {
+    function applySharedTextureSettings(texture) {
       if (!texture) {
         return;
       }
@@ -581,7 +626,7 @@
       }
     }
 
-    function shouldSkipFloorSource(src) {
+    function shouldSkipTextureSource(src) {
       if (!src) {
         return true;
       }
@@ -672,20 +717,22 @@
 
     function applyWallVisibility(mesh, visible) {
       if (!mesh) return;
-      const material = mesh.material;
-      if (!material) return;
-      if (visible) {
-        material.color.copy(WALL_VISIBLE_COLOR);
-        material.emissive.copy(WALL_VISIBLE_EMISSIVE);
-        material.opacity = 0.75;
-        material.emissiveIntensity = 0.7;
-      } else {
-        material.color.copy(WALL_HIDDEN_COLOR);
-        material.emissive.copy(WALL_HIDDEN_EMISSIVE);
-        material.opacity = 0.02;
-        material.emissiveIntensity = 0.0;
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const material of materials) {
+        if (!material) continue;
+        if (visible) {
+          material.color.copy(WALL_VISIBLE_COLOR);
+          material.emissive.copy(WALL_VISIBLE_EMISSIVE);
+          material.opacity = 0.75;
+          material.emissiveIntensity = 0.7;
+        } else {
+          material.color.copy(WALL_HIDDEN_COLOR);
+          material.emissive.copy(WALL_HIDDEN_EMISSIVE);
+          material.opacity = 0.02;
+          material.emissiveIntensity = 0.0;
+        }
+        material.needsUpdate = true;
       }
-      material.needsUpdate = true;
     }
 
     function applyTrapVisibility(mesh, visible) {
