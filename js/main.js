@@ -77,6 +77,12 @@
     const stairsMeshes = new Map();
     const visibleFloors = new Set();
     const visibleWalls = new Set();
+    const DEFAULT_FLOOR_TEXTURE_URL = "assets/textures/Floor.jpg";
+    const DEFAULT_FLOOR_TEXTURE_REMOTE = "https://raw.githubusercontent.com/satchm0h/dungeon_delver/refs/heads/main/assets/textures/Floor.jpg";
+    const inlineFloorTextureData = typeof window.FLOOR_TEXTURE_INLINE_DATA === "string" ? window.FLOOR_TEXTURE_INLINE_DATA : null;
+    const isFileProtocol = typeof window !== "undefined" && window.location && window.location.protocol === "file:";
+    let floorTexture = null;
+    let floorTextureLoading = false;
     let visitedFlags = new Uint8Array(GameLogic.MAP.WIDTH * GameLogic.MAP.HEIGHT);
     const VISIBLE_RADIUS = 10;
     const WALKABLE_TILES = new Set([
@@ -91,9 +97,9 @@
       GameLogic.TILE.LOCKED_DOOR,
       GameLogic.TILE.SECRET_DOOR
     ]);
-    const FLOOR_VISIBLE_COLOR = new THREE.Color(0x6b57d8);
-    const FLOOR_HIDDEN_COLOR = new THREE.Color(0x05020c);
-    const FLOOR_VISIBLE_EMISSIVE = new THREE.Color(0x251c55);
+    const FLOOR_VISIBLE_COLOR = new THREE.Color(0xffffff);
+    const FLOOR_HIDDEN_COLOR = new THREE.Color(0x161229);
+    const FLOOR_VISIBLE_EMISSIVE = new THREE.Color(0x241b45);
     const FLOOR_HIDDEN_EMISSIVE = new THREE.Color(0x000000);
     const WALL_VISIBLE_COLOR = new THREE.Color(0x342455);
     const WALL_HIDDEN_COLOR = new THREE.Color(0x020108);
@@ -382,6 +388,7 @@
       const wallGeom = new THREE.BoxGeometry(TILE_SIZE, TILE_SIZE, TILE_SIZE);
       const stairsGeom = new THREE.BoxGeometry(TILE_SIZE, 0.1, TILE_SIZE);
 
+      const sharedFloorTexture = getFloorTexture();
       const baseFloorMat = new THREE.MeshStandardMaterial({
         color: FLOOR_HIDDEN_COLOR.clone(),
         roughness: 0.6,
@@ -389,8 +396,13 @@
         flatShading: true,
         transparent: true,
         opacity: 0.12,
-        emissive: FLOOR_HIDDEN_EMISSIVE.clone()
+        emissive: FLOOR_HIDDEN_EMISSIVE.clone(),
+        map: sharedFloorTexture || null
       });
+      if (sharedFloorTexture) {
+        baseFloorMat.map = sharedFloorTexture;
+        baseFloorMat.needsUpdate = true;
+      }
       const baseWallMat = new THREE.MeshStandardMaterial({
         color: WALL_HIDDEN_COLOR.clone(),
         roughness: 0.75,
@@ -420,6 +432,9 @@
           const floor = new THREE.Mesh(floorGeom, baseFloorMat.clone());
           floor.position.copy(worldPos);
           floor.position.y -= TILE_SIZE * 0.5;
+          if (sharedFloorTexture) {
+            floor.material.map = sharedFloorTexture;
+          }
           applyFloorVisibility(floor, false);
           floorMeshes.set(key, floor);
           tileGroup.add(floor);
@@ -466,6 +481,175 @@
 
     function tileIndex(x, y) {
       return y * GameLogic.MAP.WIDTH + x;
+    }
+
+    function getFloorTexture() {
+      if (floorTexture) {
+        return floorTexture;
+      }
+      if (!floorTextureLoading) {
+        floorTextureLoading = true;
+        floorTexture = new THREE.Texture();
+        floorTexture.name = "FloorTexture";
+        applyFloorTextureSettings(floorTexture);
+        const sources = gatherFloorTextureSources();
+        loadFloorTextureFromSources(floorTexture, sources);
+      }
+      return floorTexture;
+    }
+
+    function gatherFloorTextureSources() {
+      const sources = [];
+      const assetOverride = window.ASSETS && window.ASSETS.textures && window.ASSETS.textures.floor;
+      if (assetOverride) {
+        sources.push(assetOverride);
+      }
+      if (isFileProtocol) {
+        sources.push(DEFAULT_FLOOR_TEXTURE_REMOTE);
+        if (inlineFloorTextureData) {
+          sources.push(inlineFloorTextureData);
+        }
+        sources.push(DEFAULT_FLOOR_TEXTURE_URL);
+      } else {
+        sources.push(DEFAULT_FLOOR_TEXTURE_URL);
+        sources.push(DEFAULT_FLOOR_TEXTURE_REMOTE);
+        if (inlineFloorTextureData) {
+          sources.push(inlineFloorTextureData);
+        }
+      }
+      return dedupeSources(sources.filter(Boolean));
+    }
+
+    function loadFloorTextureFromSources(targetTexture, sources) {
+      if (!targetTexture) {
+        return;
+      }
+      const queue = Array.isArray(sources) ? [...sources] : [];
+      const attemptNext = () => {
+        if (!queue.length) {
+          console.warn("Failed to resolve any floor texture source.");
+          floorTextureLoading = false;
+          return;
+        }
+        const src = queue.shift();
+        if (shouldSkipFloorSource(src)) {
+          attemptNext();
+          return;
+        }
+        const crossOrigin = determineCrossOrigin(src);
+        loadImageElement(src, crossOrigin)
+          .then((image) => {
+            targetTexture.image = image;
+            applyFloorTextureSettings(targetTexture);
+            targetTexture.needsUpdate = true;
+            floorTextureLoading = false;
+          })
+          .catch((err) => {
+            console.warn("Failed to load floor texture:", src, err);
+            attemptNext();
+          });
+      };
+      attemptNext();
+    }
+
+    function applyFloorTextureSettings(texture) {
+      if (!texture) {
+        return;
+      }
+      if (typeof texture.wrapS !== "undefined") {
+        texture.wrapS = THREE.RepeatWrapping;
+      }
+      if (typeof texture.wrapT !== "undefined") {
+        texture.wrapT = THREE.RepeatWrapping;
+      }
+      if (texture.repeat) {
+        texture.repeat.set(1, 1);
+      }
+      if (texture.offset) {
+        texture.offset.set(0, 0);
+      }
+      if ("colorSpace" in texture && THREE.SRGBColorSpace) {
+        texture.colorSpace = THREE.SRGBColorSpace;
+      } else if ("encoding" in texture && THREE.sRGBEncoding) {
+        texture.encoding = THREE.sRGBEncoding;
+      }
+      if (renderer && renderer.capabilities && typeof renderer.capabilities.getMaxAnisotropy === "function") {
+        const maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
+        if (maxAnisotropy && maxAnisotropy > 0) {
+          texture.anisotropy = Math.min(8, maxAnisotropy);
+        }
+      }
+    }
+
+    function shouldSkipFloorSource(src) {
+      if (!src) {
+        return true;
+      }
+      if (isDataUri(src)) {
+        return false;
+      }
+      if (isFileProtocol && isRelativePath(src)) {
+        return true;
+      }
+      return false;
+    }
+
+    function determineCrossOrigin(src) {
+      if (!src || isDataUri(src) || src.startsWith("blob:")) {
+        return null;
+      }
+      return "anonymous";
+    }
+
+    function loadImageElement(src, crossOrigin) {
+      return new Promise((resolve, reject) => {
+        const image = new Image();
+        if (typeof crossOrigin === "string") {
+          image.crossOrigin = crossOrigin;
+        }
+        image.referrerPolicy = "no-referrer";
+        image.decoding = "async";
+        image.onload = () => resolve(image);
+        image.onerror = (event) => reject(event && event.error ? event.error : event);
+        image.src = src;
+      });
+    }
+
+    function isDataUri(value) {
+      return typeof value === "string" && value.startsWith("data:");
+    }
+
+    function isHttpUrl(value) {
+      return typeof value === "string" && /^https?:\/\//i.test(value);
+    }
+
+    function isRelativePath(value) {
+      if (typeof value !== "string") {
+        return false;
+      }
+      if (isDataUri(value) || value.startsWith("blob:") || isHttpUrl(value)) {
+        return false;
+      }
+      // Treat protocol-prefixed URLs (e.g., file://, chrome-extension://) as absolute.
+      if (/^[a-z]+:/i.test(value)) {
+        return false;
+      }
+      return true;
+    }
+
+    function dedupeSources(list) {
+      if (!Array.isArray(list) || !list.length) {
+        return [];
+      }
+      const seen = new Set();
+      const result = [];
+      for (const item of list) {
+        if (item && !seen.has(item)) {
+          seen.add(item);
+          result.push(item);
+        }
+      }
+      return result;
     }
 
     function applyFloorVisibility(mesh, visible) {

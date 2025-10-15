@@ -80,6 +80,7 @@ Responsibilities include:
 - Maintaining smoothed presentation state (lerp-based for player/camera/glow) while querying discrete game snapshots.
 - Running BFS visibility every frame to drive fog-of-war materials, monster visibility, and trap/key visibility within a 10-tile radius.
 - Handling WASD movement, queueing inputs, synthesizing turn ticks, integrating HUD/audio toggles with combat hit SFX, and detecting HP loss to trigger the HUD damage flash.
+- Managing a shared floor texture instance: the loader first honors any `ASSETS.textures.floor` override, otherwise tries the local asset, a GitHub-hosted fallback, and finally an inline data URI so the game still renders correctly when opened directly from disk (`file://`). Successful loads are cached and reused across all floor tiles to avoid redundant GPU uploads.
 
 ```mermaid
 graph LR
@@ -96,6 +97,7 @@ graph LR
 Defines a global `ASSETS` object to allow future overrides:
 
 - Textures, models, and audio slots default to `null` (procedural placeholders).
+- Texture overrides can point at remote URLs; when omitted the runtime will fall back to built-in assets, including a baked-in floor tile texture exposed via `js/floor_texture_inline.js`.
 - Post-processing preference (bloom) captured for future integration.
 - Comments describe expected file formats and size guidelines.
 
