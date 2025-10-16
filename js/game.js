@@ -89,7 +89,7 @@
   }
 
   function isOpaque(tile) {
-    return tile === TILE.WALL || tile === TILE.LOCKED_DOOR || tile === TILE.SECRET_DOOR;
+    return tile === TILE.WALL || tile === TILE.LOCKED_DOOR;
   }
 
   function hasLineOfSight(ax, ay, bx, by, tiles, maxRange) {
@@ -277,13 +277,8 @@
     }
 
     const trapCount = Math.min(12, 4 + Math.floor(depth / 3));
-    const secretCount = Math.min(5, 2 + Math.floor(depth / 8));
-    const lockedCount = Math.min(4, 1 + Math.floor(depth / 18));
-    const keyCount = Math.max(lockedCount + 1, Math.min(6, 2 + Math.floor(depth / 5)));
 
     shuffleInPlace(rng, candidates);
-    const keyCandidates = candidates.slice();
-    shuffleInPlace(rng, keyCandidates);
 
     function placeFeature(pool, count, mutator) {
       let placed = 0;
@@ -302,20 +297,8 @@
       }
     }
 
-    placeFeature(keyCandidates, keyCount, (tile) => {
-      tiles[tile.y][tile.x] = TILE.KEY;
-    });
-
     placeFeature(candidates, trapCount, (tile) => {
       tiles[tile.y][tile.x] = TILE.TRAP_HIDDEN;
-    });
-
-    placeFeature(candidates, secretCount, (tile) => {
-      tiles[tile.y][tile.x] = TILE.SECRET_DOOR;
-    });
-
-    placeFeature(candidates, lockedCount, (tile) => {
-      tiles[tile.y][tile.x] = TILE.LOCKED_DOOR;
     });
   }
 
@@ -384,6 +367,467 @@
     }
 
     return farthest;
+  }
+
+  function coordKey(x, y) {
+    return `${x},${y}`;
+  }
+
+  const NEIGHBORS = [
+    { x: 1, y: 0 },
+    { x: -1, y: 0 },
+    { x: 0, y: 1 },
+    { x: 0, y: -1 }
+  ];
+
+  const MIN_DOOR_SPACING = 4;
+
+  function isNavigable(tile) {
+    return (
+      tile === TILE.FLOOR ||
+      tile === TILE.TRAP_HIDDEN ||
+      tile === TILE.TRAP_TRIGGERED ||
+      tile === TILE.KEY ||
+      tile === TILE.STAIRS_DOWN
+    );
+  }
+
+  function findShortestPath(tiles, start, goal) {
+    if (!start || !goal) {
+      return null;
+    }
+    const width = MAP.WIDTH;
+    const height = MAP.HEIGHT;
+    const visited = new Array(height);
+    const prev = new Map();
+    for (let y = 0; y < height; y += 1) {
+      visited[y] = new Array(width).fill(false);
+    }
+
+    const queue = [{ x: start.x, y: start.y }];
+    let head = 0;
+    visited[start.y][start.x] = true;
+
+    while (head < queue.length) {
+      const current = queue[head];
+      head += 1;
+
+      if (current.x === goal.x && current.y === goal.y) {
+        break;
+      }
+
+      for (const dir of NEIGHBORS) {
+        const nx = current.x + dir.x;
+        const ny = current.y + dir.y;
+        if (nx < 0 || nx >= width || ny < 0 || ny >= height) {
+          continue;
+        }
+        if (visited[ny][nx]) {
+          continue;
+        }
+        const tile = tiles[ny][nx];
+        if (!isNavigable(tile)) {
+          continue;
+        }
+        visited[ny][nx] = true;
+        prev.set(coordKey(nx, ny), current);
+        queue.push({ x: nx, y: ny });
+      }
+    }
+
+    if (!visited[goal.y] || !visited[goal.y][goal.x]) {
+      return null;
+    }
+
+    const path = [];
+    let cursor = { x: goal.x, y: goal.y };
+    while (cursor) {
+      path.push({ x: cursor.x, y: cursor.y });
+      if (cursor.x === start.x && cursor.y === start.y) {
+        break;
+      }
+      cursor = prev.get(coordKey(cursor.x, cursor.y));
+    }
+
+    return path.reverse();
+  }
+
+  function revertModifications(tiles, modifications) {
+    if (!Array.isArray(modifications)) {
+      return;
+    }
+    for (const mod of modifications) {
+      if (!mod) continue;
+      tiles[mod.y][mod.x] = mod.prev;
+    }
+  }
+
+  function isChokepoint(tiles, x, y) {
+    let count = 0;
+    for (const dir of NEIGHBORS) {
+      const nx = x + dir.x;
+      const ny = y + dir.y;
+      if (nx < 0 || nx >= MAP.WIDTH || ny < 0 || ny >= MAP.HEIGHT) {
+        continue;
+      }
+      const tile = tiles[ny][nx];
+      if (isNavigable(tile)) {
+        count += 1;
+      }
+    }
+    return count <= 2;
+  }
+
+  function tryBuildDoorBarrier(tiles, candidate, start, exitPos) {
+    const prev = candidate.prev;
+    const next = candidate.next;
+    if (!prev || !next) {
+      return null;
+    }
+    const isHorizontal = prev.y === candidate.y && next.y === candidate.y;
+    const offsets = isHorizontal ? [{ x: 0, y: -1 }, { x: 0, y: 1 }] : [{ x: -1, y: 0 }, { x: 1, y: 0 }];
+    const modifications = [];
+
+    const applyOffset = (offset) => {
+      let nx = candidate.x + offset.x;
+      let ny = candidate.y + offset.y;
+      while (nx >= 0 && nx < MAP.WIDTH && ny >= 0 && ny < MAP.HEIGHT) {
+        if ((nx === start.x && ny === start.y) || (nx === exitPos.x && ny === exitPos.y)) {
+          revertModifications(tiles, modifications);
+          console.log("[gen] barrier hit critical tile:", nx, ny);
+          return false;
+        }
+        const tile = tiles[ny][nx];
+        if (tile === TILE.WALL) {
+          break;
+        }
+        if (tile === TILE.STAIRS_DOWN || tile === TILE.LOCKED_DOOR) {
+          revertModifications(tiles, modifications);
+          console.log("[gen] barrier hit restricted tile:", nx, ny, "tile:", tile);
+          return false;
+        }
+        modifications.push({ x: nx, y: ny, prev: tile });
+        tiles[ny][nx] = TILE.WALL;
+        nx += offset.x;
+        ny += offset.y;
+      }
+      return true;
+    };
+
+    for (const offset of offsets) {
+      if (!applyOffset(offset)) {
+        return null;
+      }
+    }
+
+    return modifications;
+  }
+
+  function isReachable(tiles, start, goal, openDoors, blockedTiles) {
+    if (!start || !goal) {
+      return false;
+    }
+    const width = MAP.WIDTH;
+    const height = MAP.HEIGHT;
+    const visited = new Array(height);
+    for (let y = 0; y < height; y += 1) {
+      visited[y] = new Array(width).fill(false);
+    }
+    const queue = [{ x: start.x, y: start.y }];
+    let head = 0;
+    visited[start.y][start.x] = true;
+    const blocked = blockedTiles || new Set();
+    while (head < queue.length) {
+      const current = queue[head];
+      head += 1;
+      if (current.x === goal.x && current.y === goal.y) {
+        return true;
+      }
+      for (const dir of NEIGHBORS) {
+        const nx = current.x + dir.x;
+        const ny = current.y + dir.y;
+        if (nx < 0 || nx >= width || ny < 0 || ny >= height) {
+          continue;
+        }
+        if (visited[ny][nx]) {
+          continue;
+        }
+        const key = coordKey(nx, ny);
+        if (blocked.has(key)) {
+          continue;
+        }
+        const tile = tiles[ny][nx];
+        if (tile === TILE.LOCKED_DOOR) {
+          if (!openDoors || !openDoors.has(key)) {
+            continue;
+          }
+        } else if (!isNavigable(tile)) {
+          continue;
+        }
+        visited[ny][nx] = true;
+        queue.push({ x: nx, y: ny });
+      }
+    }
+    return false;
+  }
+
+  function gatherReachableTiles(tiles, start, openDoors, blockedTiles) {
+    const reachable = [];
+    if (!start) {
+      return reachable;
+    }
+    const width = MAP.WIDTH;
+    const height = MAP.HEIGHT;
+    const visited = new Array(height);
+    for (let y = 0; y < height; y += 1) {
+      visited[y] = new Array(width).fill(false);
+    }
+    const queue = [{ x: start.x, y: start.y }];
+    let head = 0;
+    visited[start.y][start.x] = true;
+    const blocked = blockedTiles || new Set();
+
+    while (head < queue.length) {
+      const current = queue[head];
+      head += 1;
+      reachable.push(current);
+
+      for (const dir of NEIGHBORS) {
+        const nx = current.x + dir.x;
+        const ny = current.y + dir.y;
+        if (nx < 0 || nx >= width || ny < 0 || ny >= height) {
+          continue;
+        }
+        if (visited[ny][nx]) {
+          continue;
+        }
+        const key = coordKey(nx, ny);
+        if (blocked.has(key)) {
+          continue;
+        }
+        const tile = tiles[ny][nx];
+        if (tile === TILE.LOCKED_DOOR) {
+          if (!openDoors || !openDoors.has(key)) {
+            continue;
+          }
+        } else if (!isNavigable(tile)) {
+          continue;
+        }
+        visited[ny][nx] = true;
+        queue.push({ x: nx, y: ny });
+      }
+    }
+
+    return reachable;
+  }
+
+  function chooseKeyLocation(rng, tiles, regionStart, openDoors, blockedDoorKey, usedKeys, forbiddenKeys, pathIndexMap, minIndex, maxIndex) {
+    const blocked = new Set(blockedDoorKey ? [blockedDoorKey] : []);
+    const reachable = gatherReachableTiles(tiles, regionStart, openDoors, blocked);
+    if (!reachable.length) {
+      console.log("[gen] key search: no reachable tiles (blockedDoor:", blockedDoorKey, ")");
+      return null;
+    }
+    const options = [];
+    for (const pos of reachable) {
+      const key = coordKey(pos.x, pos.y);
+      if (usedKeys.has(key) || forbiddenKeys.has(key)) {
+        continue;
+      }
+      const pathIdx = pathIndexMap ? pathIndexMap.get(key) : undefined;
+      if (typeof pathIdx !== "number") {
+        continue;
+      }
+      if (typeof minIndex === "number" && pathIdx <= minIndex) {
+        continue;
+      }
+      if (typeof maxIndex === "number" && pathIdx >= maxIndex) {
+        continue;
+      }
+      const tile = tiles[pos.y][pos.x];
+      if (tile !== TILE.FLOOR) {
+        continue;
+      }
+      options.push(pos);
+    }
+    if (!options.length) {
+      console.log("[gen] key search: no floor options (blockedDoor:", blockedDoorKey, ")");
+      return null;
+    }
+    shuffleInPlace(rng, options);
+    return options[0];
+  }
+
+  function attemptDoorPlacement(rng, tiles, entryStart, exitPos, candidate, openDoors, usedKeys, forbiddenKeys, pathIndexMap, minIndex, maxIndex) {
+    const doorKey = coordKey(candidate.x, candidate.y);
+    const blocked = new Set([doorKey]);
+    const barrierMods = tryBuildDoorBarrier(tiles, candidate, entryStart, exitPos);
+    if (!barrierMods) {
+      console.log("[gen] barrier construction failed for candidate:", candidate);
+      return null;
+    }
+    console.log("[gen] barrier tiles:", barrierMods.length, "for candidate", candidate);
+    if (isReachable(tiles, entryStart, exitPos, openDoors, blocked)) {
+      revertModifications(tiles, barrierMods);
+      console.log("[gen] door candidate bypassed:", candidate);
+      return null;
+    }
+
+    const keyPos = chooseKeyLocation(rng, tiles, entryStart, openDoors, doorKey, usedKeys, forbiddenKeys, pathIndexMap, minIndex, maxIndex);
+    if (!keyPos) {
+      revertModifications(tiles, barrierMods);
+      console.log("[gen] door candidate no key available:", candidate);
+      return null;
+    }
+
+    tiles[candidate.y][candidate.x] = TILE.LOCKED_DOOR;
+    tiles[keyPos.y][keyPos.x] = TILE.KEY;
+    openDoors.add(doorKey);
+    usedKeys.add(coordKey(keyPos.x, keyPos.y));
+    console.log("[gen] placed door:", candidate, "with key:", keyPos);
+    return { door: { x: candidate.x, y: candidate.y }, key: keyPos };
+  }
+
+  function forceDoorPlacement(rng, tiles, path, entryStart, lastDoorIndex, exitPos, openDoors, usedKeys, forbiddenKeys, pathIndexMap) {
+    for (let i = 1; i < path.length - 1; i += 1) {
+      const current = path[i];
+      if (tiles[current.y][current.x] !== TILE.FLOOR) {
+        continue;
+      }
+      const prev = path[i - 1];
+      const next = path[i + 1];
+      const candidate = { x: current.x, y: current.y, prev, next, index: i };
+      if (candidate.index - lastDoorIndex < MIN_DOOR_SPACING) {
+        continue;
+      }
+      if (candidate.index <= 2 || candidate.index >= path.length - 3) {
+        continue;
+      }
+      const approach = prev ? { x: prev.x, y: prev.y } : entryStart;
+      const modifications = tryBuildDoorBarrier(tiles, candidate, approach, exitPos);
+      if (!modifications) {
+        continue;
+      }
+      const doorKey = coordKey(current.x, current.y);
+      const reachBlocked = new Set([doorKey]);
+      if (isReachable(tiles, approach, exitPos, openDoors, reachBlocked)) {
+        revertModifications(tiles, modifications);
+        console.log("[gen] forced candidate still reachable:", current);
+        continue;
+      }
+
+      const minIndex = Number.isFinite(lastDoorIndex) ? lastDoorIndex + 1 : 0;
+      const maxIndex = i - 1;
+      const keyPos = chooseKeyLocation(rng, tiles, approach, openDoors, doorKey, usedKeys, forbiddenKeys, pathIndexMap, minIndex, maxIndex);
+      if (!keyPos) {
+        revertModifications(tiles, modifications);
+        console.log("[gen] forced door key placement failed at", current);
+        continue;
+      }
+
+      tiles[current.y][current.x] = TILE.LOCKED_DOOR;
+      tiles[keyPos.y][keyPos.x] = TILE.KEY;
+      openDoors.add(doorKey);
+      usedKeys.add(coordKey(keyPos.x, keyPos.y));
+      console.log("[gen] forced door:", current, "with key:", keyPos, "barrier tiles:", modifications.length);
+      const nextEntry = next ? { x: next.x, y: next.y } : { x: current.x, y: current.y };
+      return { door: { x: current.x, y: current.y }, key: keyPos, index: i, nextEntry };
+    }
+    return null;
+  }
+
+  function placeDoorsAndKeys(rng, tiles, start, exitPos) {
+    if (!start || !exitPos) {
+      return;
+    }
+    const path = findShortestPath(tiles, start, exitPos);
+    if (!path || path.length < 3) {
+      return;
+    }
+
+    const pathIndexMap = new Map();
+    for (let i = 0; i < path.length; i += 1) {
+      const node = path[i];
+      pathIndexMap.set(coordKey(node.x, node.y), i);
+    }
+
+    const candidates = [];
+    for (let i = 1; i < path.length - 1; i += 1) {
+      const step = path[i];
+      if (tiles[step.y][step.x] !== TILE.FLOOR) {
+        continue;
+      }
+      candidates.push({ x: step.x, y: step.y, index: i, prev: path[i - 1], next: path[i + 1] });
+    }
+
+    const openDoors = new Set();
+    const usedKeys = new Set();
+    const forbiddenKeys = new Set([coordKey(start.x, start.y), coordKey(exitPos.x, exitPos.y)]);
+    const placed = [];
+    let lastDoorIndex = -Infinity;
+    let entryStart = { x: start.x, y: start.y };
+
+    console.log("[gen] path length:", path.length, "candidates:", candidates.length);
+
+    if (!candidates.length) {
+      const forced = forceDoorPlacement(rng, tiles, path, entryStart, lastDoorIndex, exitPos, openDoors, usedKeys, forbiddenKeys, pathIndexMap);
+      if (forced) {
+        placed.push(forced);
+        lastDoorIndex = forced.index;
+        forbiddenKeys.add(coordKey(forced.key.x, forced.key.y));
+        entryStart = forced.nextEntry || entryStart;
+      }
+      console.log("[gen] no candidates; forced door result:", !!placed.length);
+      return;
+    }
+
+    shuffleInPlace(rng, candidates);
+    candidates.sort((a, b) => a.index - b.index);
+
+    const desiredDoors = Math.max(1, Math.min(3, Math.floor(path.length / 12) + 1, candidates.length));
+    for (const candidate of candidates) {
+      if (placed.length >= desiredDoors) {
+        break;
+      }
+      if (candidate.index - lastDoorIndex < MIN_DOOR_SPACING) {
+        console.log("[gen] candidate too close to previous door:", candidate);
+        continue;
+      }
+      if (candidate.index <= 2 || candidate.index >= path.length - 3) {
+        console.log("[gen] candidate too close to spawn/exit:", candidate);
+        continue;
+      }
+      if (!isChokepoint(tiles, candidate.x, candidate.y)) {
+        console.log("[gen] candidate not chokepoint:", candidate);
+        continue;
+      }
+      const approach = candidate.prev ? { x: candidate.prev.x, y: candidate.prev.y } : entryStart;
+      const minIndex = Number.isFinite(lastDoorIndex) ? lastDoorIndex + 1 : 0;
+      const maxIndex = candidate.index - 1;
+      const result = attemptDoorPlacement(rng, tiles, approach, exitPos, candidate, openDoors, usedKeys, forbiddenKeys, pathIndexMap, minIndex, maxIndex);
+      if (result) {
+        placed.push(result);
+        lastDoorIndex = candidate.index;
+        forbiddenKeys.add(coordKey(result.key.x, result.key.y));
+        if (candidate.next) {
+          entryStart = { x: candidate.next.x, y: candidate.next.y };
+        }
+      }
+    }
+
+    if (!placed.length) {
+      const forced = forceDoorPlacement(rng, tiles, path, entryStart, lastDoorIndex, exitPos, openDoors, usedKeys, forbiddenKeys, pathIndexMap);
+      if (!forced) {
+        console.log("[gen] forced placement failed");
+        return;
+      }
+      placed.push(forced);
+      lastDoorIndex = forced.index;
+      forbiddenKeys.add(coordKey(forced.key.x, forced.key.y));
+      entryStart = forced.nextEntry || entryStart;
+    }
+
+    console.log("[gen] total doors placed:", placed.length);
   }
 
   function createMonsters(rng, depth, tiles, playerPos, exitPos) {
@@ -478,6 +922,8 @@
       tiles[farthest.y][farthest.x] = TILE.STAIRS_DOWN;
     }
 
+    placeDoorsAndKeys(this.rng, tiles, { x: px, y: py }, farthest);
+
     this.state.tiles = tiles;
     this.state.monsters = createMonsters(this.rng, depth, tiles, { x: px, y: py }, farthest);
 
@@ -512,14 +958,6 @@
     const events = [];
     let moved = false;
     if (tile === TILE.WALL) {
-      return;
-    }
-
-    if (tile === TILE.SECRET_DOOR) {
-      this.state.tiles[ny][nx] = TILE.FLOOR;
-      events.push({ type: "secret-revealed", x: nx, y: ny });
-      this.state.events = events;
-      this.state.lastAction = events[events.length - 1];
       return;
     }
 
@@ -599,10 +1037,6 @@
       this.state.monsters = this.state.monsters.filter((m) => m.id !== monster.id);
       events.push({ type: "monster-defeated", monsterId: monster.id });
       this.grantXP(monster.xp, events);
-      if (this.rng() < 0.15) {
-        this.state.player.keys += 1;
-        events.push({ type: "key-drop" });
-      }
     }
 
     if (player.hp <= 0) {
@@ -632,7 +1066,6 @@
       return;
     }
     this.state.depth += 1;
-    this.state.player.keys += 1;
     if (this.state.depth > this.bestScore) {
       this.bestScore = this.state.depth;
       window.localStorage.setItem(LOCAL_STORAGE_KEY, String(this.bestScore));

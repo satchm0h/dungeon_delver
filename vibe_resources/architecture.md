@@ -54,9 +54,10 @@ classDiagram
 
 Key responsibilities:
 
-- Procedural map generation with room carving, corridor linking (minimum-spanning approach + extra loops), trap/door/key sprinkling, and farthest-floor stair placement. Keys are always distributed in greater quantity than locked doors to avoid deadlocks.
+- Procedural map generation with room carving, corridor linking (minimum-spanning approach + extra loops), hidden-trap sprinkling, locked-door placement, and farthest-floor stair placement. Secret doors have been removed for now.
 - Turn-based movement: the player moves one tile per input, monsters respond in discrete turns using line-of-sight activation.
 - Trap resolution deals immediate damage and converts the tile to its triggered variant; key tiles are consumed on contact and raise the player’s key inventory.
+- Locked-door routing guarantees 1–3 chokepoints per floor: each door sits on the critical path between spawn and exit, exactly one matching key is spawned on the same side as the player before the door, and opening the door consumes the key.
 - Combat resolution, XP, leveling, and persistence for best floor reached.
 - Collection of telemetry for debug overlays.
 
@@ -80,7 +81,7 @@ Responsibilities include:
 - Maintaining smoothed presentation state (lerp-based for player/camera/glow) while querying discrete game snapshots.
 - Running BFS visibility every frame to drive fog-of-war materials, monster visibility, and trap/key visibility within a 10-tile radius.
 - Handling WASD movement, queueing inputs, synthesizing turn ticks, integrating HUD/audio toggles with combat hit SFX, and detecting HP loss to trigger the HUD damage flash.
-- Managing shared floor and wall texture instances: each loader first honors `ASSETS.textures.*` overrides, then falls back to the built-in assets, a GitHub-hosted copy, and (for the floor) an inline data URI so the game still renders correctly when opened directly from disk (`file://`). Successful loads are cached and reused across all meshes to avoid redundant GPU uploads. Wall caps render with solid material so the texture only appears on vertical faces.
+- Managing shared floor and wall texture instances: each loader first honors `ASSETS.textures.*` overrides, then falls back to the built-in assets, a GitHub-hosted copy, and (for the floor) an inline data URI so the game still renders correctly when opened directly from disk (`file://`). Successful loads are cached and reused across all meshes to avoid redundant GPU uploads. Wall caps render with solid material so the texture only appears on vertical faces, and locked doors receive dedicated geometry/material blends that respond to visibility and unlock events.
 
 ```mermaid
 graph LR

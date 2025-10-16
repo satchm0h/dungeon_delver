@@ -72,11 +72,13 @@
     });
     const floorMeshes = new Map();
     const wallMeshes = new Map();
+    const doorMeshes = new Map();
     const trapMeshes = new Map();
     const keyMeshes = new Map();
     const stairsMeshes = new Map();
     const visibleFloors = new Set();
     const visibleWalls = new Set();
+    const visibleDoors = new Set();
     const isFileProtocol = typeof window !== "undefined" && window.location && window.location.protocol === "file:";
     const inlineFloorTextureData = typeof window.FLOOR_TEXTURE_INLINE_DATA === "string" ? window.FLOOR_TEXTURE_INLINE_DATA : null;
     const inlineWallTextureData = typeof window.WALL_TEXTURE_INLINE_DATA === "string" ? window.WALL_TEXTURE_INLINE_DATA : null;
@@ -85,14 +87,14 @@
         key: "floor",
         name: "FloorTexture",
         local: "assets/textures/Floor.jpg",
-        remote: "https://raw.githubusercontent.com/satchm0h/dungeon_delver/refs/heads/main/assets/textures/Floor.jpg",
+        remote: "https://raw.githubusercontent.com/satchm0h/dungeon_delver/main/assets/textures/Floor.jpg",
         inline: inlineFloorTextureData
       },
       wall: {
         key: "wall",
         name: "WallTexture",
         local: "assets/textures/Walls.png",
-        remote: "https://raw.githubusercontent.com/satchm0h/dungeon_delver/refs/heads/main/assets/textures/Walls.png",
+        remote: "https://raw.githubusercontent.com/satchm0h/dungeon_delver/main/assets/textures/Walls.png",
         inline: inlineWallTextureData
       }
     };
@@ -111,8 +113,7 @@
     ]);
     const BLOCKING_TILES = new Set([
       GameLogic.TILE.WALL,
-      GameLogic.TILE.LOCKED_DOOR,
-      GameLogic.TILE.SECRET_DOOR
+      GameLogic.TILE.LOCKED_DOOR
     ]);
     const FLOOR_VISIBLE_COLOR = new THREE.Color(0xffffff);
     const FLOOR_HIDDEN_COLOR = new THREE.Color(0x161229);
@@ -122,6 +123,14 @@
     const WALL_HIDDEN_COLOR = new THREE.Color(0x07030f);
     const WALL_VISIBLE_EMISSIVE = new THREE.Color(0x23203d);
     const WALL_HIDDEN_EMISSIVE = new THREE.Color(0x000000);
+    const DOOR_VISIBLE_COLOR = new THREE.Color(0xb48a60);
+    const DOOR_HIDDEN_COLOR = new THREE.Color(0x1b1209);
+    const DOOR_VISIBLE_EMISSIVE = new THREE.Color(0x5b3b1f);
+    const DOOR_HIDDEN_EMISSIVE = new THREE.Color(0x000000);
+    const DOOR_FRAME_VISIBLE_COLOR = new THREE.Color(0x8f6b45);
+    const DOOR_FRAME_HIDDEN_COLOR = new THREE.Color(0x160d06);
+    const DOOR_BAND_VISIBLE_COLOR = new THREE.Color(0xd4c8b6);
+    const DOOR_BAND_HIDDEN_COLOR = new THREE.Color(0x352f28);
     const TRAP_VISIBLE_COLOR = new THREE.Color(0x9f4dff);
     const TRAP_HIDDEN_COLOR = new THREE.Color(0x120220);
     const TRAP_VISIBLE_EMISSIVE = new THREE.Color(0x3a0c68);
@@ -207,6 +216,132 @@
         createWallMaterial(true, sharedTexture),
         createWallMaterial(true, sharedTexture)
       ];
+    }
+
+    function isNavigableDoorTile(tile) {
+      return tile === GameLogic.TILE.FLOOR ||
+        tile === GameLogic.TILE.TRAP_HIDDEN ||
+        tile === GameLogic.TILE.TRAP_TRIGGERED ||
+        tile === GameLogic.TILE.KEY ||
+        tile === GameLogic.TILE.STAIRS_DOWN;
+    }
+
+    function ensureDoorMesh(x, y, tiles) {
+      const key = tileKey(x, y);
+      let group = doorMeshes.get(key);
+      const worldPos = tileToWorld(x, y, scratchVec);
+      const baseY = worldPos.y - TILE_SIZE * 0.45;
+
+      const passNorth = tiles[y - 1] && isNavigableDoorTile(tiles[y - 1][x]);
+      const passSouth = tiles[y + 1] && isNavigableDoorTile(tiles[y + 1][x]);
+      const passEast = tiles[y][x + 1] !== undefined && isNavigableDoorTile(tiles[y][x + 1]);
+      const passWest = tiles[y][x - 1] !== undefined && isNavigableDoorTile(tiles[y][x - 1]);
+      const vertical = passNorth && passSouth && !(passEast && passWest);
+
+      if (!group) {
+        const panelMaterial = new THREE.MeshStandardMaterial({
+          color: DOOR_HIDDEN_COLOR.clone(),
+          emissive: DOOR_HIDDEN_EMISSIVE.clone(),
+          emissiveIntensity: 0,
+          roughness: 0.5,
+          metalness: 0.2,
+          transparent: true,
+          opacity: 0.85,
+          flatShading: true
+        });
+        const frameMaterial = new THREE.MeshStandardMaterial({
+          color: DOOR_FRAME_HIDDEN_COLOR.clone(),
+          emissive: DOOR_HIDDEN_EMISSIVE.clone(),
+          emissiveIntensity: 0,
+          roughness: 0.6,
+          metalness: 0.25,
+          transparent: true,
+          opacity: 0.6,
+          flatShading: true
+        });
+        const bandMaterial = new THREE.MeshStandardMaterial({
+          color: DOOR_BAND_HIDDEN_COLOR.clone(),
+          emissive: DOOR_HIDDEN_EMISSIVE.clone(),
+          emissiveIntensity: 0.1,
+          roughness: 0.35,
+          metalness: 0.7,
+          transparent: true,
+          opacity: 0.9,
+          flatShading: true
+        });
+
+        const panel = new THREE.Mesh(
+          new THREE.BoxGeometry(TILE_SIZE * 0.68, TILE_SIZE * 1.28, TILE_SIZE * 0.18),
+          panelMaterial
+        );
+        panel.position.y = TILE_SIZE * 0.64;
+
+        const frameLeft = new THREE.Mesh(
+          new THREE.BoxGeometry(TILE_SIZE * 0.12, TILE_SIZE * 1.32, TILE_SIZE * 0.22),
+          frameMaterial
+        );
+        frameLeft.position.set(-TILE_SIZE * 0.36, TILE_SIZE * 0.66, 0);
+
+        const frameRight = frameLeft.clone();
+        frameRight.position.x = TILE_SIZE * 0.36;
+
+        const band = new THREE.Mesh(
+          new THREE.BoxGeometry(TILE_SIZE * 0.68, TILE_SIZE * 0.12, TILE_SIZE * 0.24),
+          bandMaterial
+        );
+        band.position.y = TILE_SIZE * 0.64;
+
+        group = new THREE.Group();
+        group.add(panel, frameLeft, frameRight, band);
+        group.position.set(worldPos.x, baseY, worldPos.z);
+        group.userData = {
+          materials: [panelMaterial, frameMaterial, bandMaterial],
+          band: band
+        };
+        if (!vertical) {
+          group.rotation.y = Math.PI / 2;
+        }
+        doorMeshes.set(key, group);
+        if (tileGroup) {
+          tileGroup.add(group);
+        }
+      } else {
+        group.position.set(worldPos.x, baseY, worldPos.z);
+        group.rotation.y = vertical ? 0 : Math.PI / 2;
+        if (group.parent !== tileGroup && tileGroup) {
+          tileGroup.add(group);
+        }
+      }
+      return group;
+    }
+
+    function syncDoorMeshes(snapshot) {
+      if (!tileGroup) {
+        return;
+      }
+      const required = new Set();
+      const tiles = snapshot.tiles;
+      for (let y = 0; y < tiles.length; y += 1) {
+        for (let x = 0; x < tiles[y].length; x += 1) {
+          if (tiles[y][x] === GameLogic.TILE.LOCKED_DOOR) {
+            const key = tileKey(x, y);
+            required.add(key);
+            ensureDoorMesh(x, y, tiles);
+          }
+        }
+      }
+      const toRemove = [];
+      for (const [key, mesh] of doorMeshes) {
+        if (!required.has(key)) {
+          if (mesh.parent === tileGroup) {
+            tileGroup.remove(mesh);
+          }
+          toRemove.push(key);
+        }
+      }
+      for (const key of toRemove) {
+        doorMeshes.delete(key);
+      }
     }
 
     function init() {
@@ -426,6 +561,7 @@
       tileGroup = new THREE.Group();
       floorMeshes.clear();
       wallMeshes.clear();
+      doorMeshes.clear();
       trapMeshes.clear();
       keyMeshes.clear();
       stairsMeshes.clear();
@@ -485,6 +621,11 @@
             applyWallVisibility(wall, false);
             wallMeshes.set(key, wall);
             tileGroup.add(wall);
+          } else if (tile === GameLogic.TILE.LOCKED_DOOR) {
+            const door = ensureDoorMesh(x, y, tiles);
+            if (door) {
+              applyDoorVisibility(door, false);
+            }
           } else if (tile === GameLogic.TILE.STAIRS_DOWN) {
             const stairs = new THREE.Mesh(stairsGeom, baseStairsMat.clone());
             stairs.scale.set(0.7, 1, 0.7);
@@ -732,6 +873,64 @@
           material.emissiveIntensity = 0.0;
         }
         material.needsUpdate = true;
+      }
+    }
+
+    function applyDoorVisibility(mesh, visible) {
+      if (!mesh) {
+        return;
+      }
+      const materials = mesh.userData && mesh.userData.materials;
+      if (!Array.isArray(materials)) {
+        return;
+      }
+      const panelMaterial = materials[0];
+      const frameMaterial = materials[1];
+      const bandMaterial = materials[2];
+
+      if (panelMaterial) {
+        if (visible) {
+          panelMaterial.color.copy(DOOR_VISIBLE_COLOR);
+          panelMaterial.emissive.copy(DOOR_VISIBLE_EMISSIVE);
+          panelMaterial.opacity = 0.96;
+          panelMaterial.emissiveIntensity = 0.7;
+        } else {
+          panelMaterial.color.copy(DOOR_HIDDEN_COLOR);
+          panelMaterial.emissive.copy(DOOR_HIDDEN_EMISSIVE);
+          panelMaterial.opacity = 0.18;
+          panelMaterial.emissiveIntensity = 0.0;
+        }
+        panelMaterial.needsUpdate = true;
+      }
+
+      if (frameMaterial) {
+        if (visible) {
+          frameMaterial.color.copy(DOOR_FRAME_VISIBLE_COLOR);
+          frameMaterial.emissive.copy(DOOR_VISIBLE_EMISSIVE);
+          frameMaterial.opacity = 0.8;
+          frameMaterial.emissiveIntensity = 0.45;
+        } else {
+          frameMaterial.color.copy(DOOR_FRAME_HIDDEN_COLOR);
+          frameMaterial.emissive.copy(DOOR_HIDDEN_EMISSIVE);
+          frameMaterial.opacity = 0.1;
+          frameMaterial.emissiveIntensity = 0.0;
+        }
+        frameMaterial.needsUpdate = true;
+      }
+
+      if (bandMaterial) {
+        if (visible) {
+          bandMaterial.color.copy(DOOR_BAND_VISIBLE_COLOR);
+          bandMaterial.emissive.copy(DOOR_VISIBLE_EMISSIVE);
+          bandMaterial.opacity = 0.9;
+          bandMaterial.emissiveIntensity = 0.35;
+        } else {
+          bandMaterial.color.copy(DOOR_BAND_HIDDEN_COLOR);
+          bandMaterial.emissive.copy(DOOR_HIDDEN_EMISSIVE);
+          bandMaterial.opacity = 0.12;
+          bandMaterial.emissiveIntensity = 0.0;
+        }
+        bandMaterial.needsUpdate = true;
       }
     }
 
@@ -1013,8 +1212,10 @@
 
       visibleFloors.clear();
       visibleWalls.clear();
+      visibleDoors.clear();
       visitedFlags.fill(0);
 
+      syncDoorMeshes(snapshot);
       syncTrapMeshes(snapshot);
       syncKeyMeshes(snapshot);
 
@@ -1059,8 +1260,10 @@
           if (BLOCKING_TILES.has(tile)) {
             if (tile === GameLogic.TILE.LOCKED_DOOR) {
               visibleFloors.add(neighborKey);
+              visibleDoors.add(neighborKey);
+            } else {
+              visibleWalls.add(neighborKey);
             }
-            visibleWalls.add(neighborKey);
             continue;
           }
 
@@ -1084,6 +1287,9 @@
       }
       for (const [key, mesh] of wallMeshes) {
         applyWallVisibility(mesh, visibleWalls.has(key));
+      }
+      for (const [key, mesh] of doorMeshes) {
+        applyDoorVisibility(mesh, visibleDoors.has(key));
       }
       for (const [key, mesh] of trapMeshes) {
         applyTrapVisibility(mesh, visibleFloors.has(key));
